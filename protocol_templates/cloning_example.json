@@ -1,0 +1,207 @@
+{
+  "protocol_name": "质粒克隆（Gibson Assembly）",
+  "version": "1.0",
+  "author": "",
+  "storage_items": [
+    {
+      "key": "ligation_product",
+      "label": "连接产物（转化菌液）",
+      "tube_type": "1.5mL EP管",
+      "default_box": "",
+      "notes_template": "Gibson #{n}"
+    },
+    {
+      "key": "plasmid_stock",
+      "label": "质粒储存液",
+      "tube_type": "1.5mL EP管",
+      "default_box": "",
+      "notes_template": "质粒 #{n}"
+    }
+  ],
+  "steps": [
+    {
+      "title": "PCR 扩增目的片段",
+      "description": "使用高保真酶扩增目的基因片段。体系：25µL 2× Phusion Mix，正向引物 1µL，反向引物 1µL，模板 1µL，补水至 50µL。",
+      "timer_seconds": 3600,
+      "has_camera": false,
+      "camera_required": false,
+      "fields": [
+        {
+          "key": "insert_name",
+          "label": "目的片段名称",
+          "type": "text",
+          "default": "",
+          "required": true,
+          "options": []
+        },
+        {
+          "key": "expected_size",
+          "label": "预期大小 (bp)",
+          "type": "number",
+          "default": "",
+          "required": false,
+          "options": []
+        }
+      ]
+    },
+    {
+      "title": "PCR 产物纯化",
+      "description": "使用 PCR 纯化试剂盒纯化扩增产物，洗脱体积 30µL ddH₂O。Nanodrop 测定浓度，记录 ng/µL 值。",
+      "timer_seconds": 900,
+      "has_camera": false,
+      "camera_required": false,
+      "fields": [
+        {
+          "key": "concentration",
+          "label": "DNA 浓度 (ng/µL)",
+          "type": "number",
+          "default": "",
+          "required": true,
+          "options": []
+        },
+        {
+          "key": "a260_280",
+          "label": "A260/A280",
+          "type": "number",
+          "default": "",
+          "required": false,
+          "options": []
+        }
+      ]
+    },
+    {
+      "title": "载体线性化",
+      "description": "用限制性内切酶消化载体质粒 1µg，37°C 孵育 60min。体系：质粒 1µg，酶 1µL，10× Buffer 2µL，补水至 20µL。",
+      "timer_seconds": 3600,
+      "has_camera": false,
+      "camera_required": false,
+      "fields": [
+        {
+          "key": "vector_name",
+          "label": "载体名称",
+          "type": "text",
+          "default": "",
+          "required": true,
+          "options": []
+        },
+        {
+          "key": "enzyme",
+          "label": "限制酶",
+          "type": "text",
+          "default": "",
+          "required": false,
+          "options": []
+        }
+      ]
+    },
+    {
+      "title": "Gibson Assembly 连接",
+      "description": "按摩尔比 1:3（载体:插入片段）混合，加入 10µL 2× Gibson Assembly Mix，补水至 20µL，50°C 孵育 60min。",
+      "timer_seconds": 3600,
+      "has_camera": false,
+      "camera_required": false,
+      "fields": [
+        {
+          "key": "vector_amount",
+          "label": "载体用量 (ng)",
+          "type": "number",
+          "default": "100",
+          "required": false,
+          "options": []
+        },
+        {
+          "key": "insert_amount",
+          "label": "插入片段用量 (ng)",
+          "type": "number",
+          "default": "",
+          "required": false,
+          "options": []
+        }
+      ]
+    },
+    {
+      "title": "转化感受态细胞",
+      "description": "取 2µL 连接产物加入 50µL 感受态细胞，冰浴 30min，42°C 热激 45s，冰浴 2min，加 950µL SOC 培养基，37°C 振荡培养 60min。",
+      "timer_seconds": 5400,
+      "has_camera": false,
+      "camera_required": false,
+      "fields": [
+        {
+          "key": "competent_cells",
+          "label": "感受态细胞株",
+          "type": "dropdown",
+          "default": "DH5α",
+          "required": true,
+          "options": ["DH5α", "Top10", "BL21(DE3)", "Stbl3"]
+        }
+      ]
+    },
+    {
+      "title": "涂板培养",
+      "description": "将菌液涂布于含 100µg/mL 氨苄青霉素的 LB 平板，37°C 倒置培养 16h。",
+      "timer_seconds": 57600,
+      "has_camera": true,
+      "camera_required": false,
+      "fields": [
+        {
+          "key": "antibiotic",
+          "label": "抗生素",
+          "type": "dropdown",
+          "default": "氨苄青霉素 (Amp)",
+          "required": false,
+          "options": ["氨苄青霉素 (Amp)", "卡那霉素 (Kan)", "氯霉素 (Cm)", "四环素 (Tet)"]
+        },
+        {
+          "key": "colony_count",
+          "label": "菌落数量（估计）",
+          "type": "number",
+          "default": "",
+          "required": false,
+          "options": []
+        }
+      ]
+    },
+    {
+      "title": "挑克隆 & 菌落 PCR 验证",
+      "description": "挑取 8 个单克隆，分别接种至 5mL LB（含抗生素）液体培养基，同时进行菌落 PCR 验证。37°C 振荡培养 12h。",
+      "timer_seconds": 43200,
+      "has_camera": false,
+      "camera_required": false,
+      "fields": [
+        {
+          "key": "clone_count",
+          "label": "挑克隆数量",
+          "type": "number",
+          "default": "8",
+          "required": false,
+          "options": []
+        },
+        {
+          "key": "positive_clones",
+          "label": "阳性克隆编号",
+          "type": "text",
+          "default": "",
+          "required": false,
+          "options": []
+        }
+      ]
+    },
+    {
+      "title": "质粒提取",
+      "description": "取阳性克隆菌液 1.5mL，离心收菌，使用质粒小提试剂盒提取质粒，洗脱体积 50µL。Nanodrop 测定浓度。",
+      "timer_seconds": 1800,
+      "has_camera": false,
+      "camera_required": false,
+      "fields": [
+        {
+          "key": "plasmid_conc",
+          "label": "质粒浓度 (ng/µL)",
+          "type": "number",
+          "default": "",
+          "required": true,
+          "options": []
+        }
+      ]
+    }
+  ]
+}

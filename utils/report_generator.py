@@ -1,0 +1,238 @@
+"""
+ELN App — Report Generator
+Generates a Markdown experiment report from experiment + steps + storage data.
+"""
+
+from __future__ import annotations
+from datetime import datetime, timezone
+from typing import Optional
+
+from db.models import Experiment, Step, StorageItem, Box
+from utils.inline_editor import render_plain
+
+
+def generate_report(
+    experiment: Experiment,
+    steps: list[Step],
+    storage_items: list[StorageItem],
+    boxes: dict[int, Box],
+) -> str:
+    """Return a complete Markdown report string."""
+    lines: list[str] = []
+
+    # ── Header ──────────────────────────────────
+    lines.append(f"# 实验报告：{experiment.name}")
+    lines.append("")
+    lines.append(f"**创建时间**：{_fmt_dt(experiment.created_at)}")
+
+    # Find last completed step time
+    completed_times = [s.completed_at for s in steps if s.completed_at]
+    if completed_times:
+        lines.append(f"**完成时间**：{_fmt_dt(max(completed_times))}")
+
+    lines.append(f"**状态**：{_status_label(experiment.status)}")
+    if experiment.notes:
+        lines.append(f"**备注**：{experiment.notes}")
+    lines.append("")
+
+    # ── Progress summary ────────────────────────
+    total = len(steps)
+    completed = sum(1 for s in steps if s.completed_at)
+    lines.append(f"**步骤完成**：{completed} / {total}")
+    lines.append("")
+
+    # ── Step records ────────────────────────────
+    lines.append("---")
+    lines.append("")
+    lines.append("## 步骤记录")
+    lines.append("")
+
+    for step in steps:
+        lines.extend(_render_step(step))
+
+    # ── Storage table ────────────────────────────
+    if storage_items:
+        lines.append("---")
+        lines.append("")
+        lines.append("## 存储登记")
+        lines.append("")
+        lines.extend(_render_storage_table(storage_items, boxes))
+        lines.append("")
+
+    # ── Pending photos ───────────────────────────
+    pending_photo_steps = [s for s in steps if s.photo_pending]
+    if pending_photo_steps:
+        lines.append("---")
+        lines.append("")
+        lines.append("## 待补照片")
+        lines.append("")
+        lines.append("以下步骤在实验时跳过了拍照，请补充：")
+        lines.append("")
+        for s in pending_photo_steps:
+            lines.append(f"- **Step {s.step_index + 1}** · {s.title}")
+        lines.append("")
+
+    # ── Raw protocol JSON ────────────────────────
+    lines.append("---")
+    lines.append("")
+    lines.append("## 原始协议参数")
+    lines.append("")
+    lines.append("<details><summary>展开查看 JSON</summary>")
+    lines.append("")
+    lines.append("```json")
+    lines.append(experiment.protocol_json)
+    lines.append("```")
+    lines.append("")
+    lines.append("</details>")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────
+# Step rendering
+# ─────────────────────────────────────────────
+
+def _render_step(step: Step) -> list[str]:
+    lines: list[str] = []
+    status_icon = "✅" if step.completed_at else "⬜"
+    lines.append(f"### {status_icon} Step {step.step_index + 1} · {step.title}")
+    lines.append("")
+
+    # Description with overrides applied
+    overrides = step.get_description_overrides()
+    if overrides:
+        rendered_desc = render_plain(step.description, overrides)
+        lines.append(f"**描述**：{rendered_desc}")
+        lines.append("")
+        lines.append("**参数修改**（相对原始协议）：")
+        lines.append("")
+        for key, new_val in overrides.items():
+            lines.append(f"- `{key}` → `{new_val}` ⚠️ 已修改")
+        lines.append("")
+    else:
+        lines.append(f"**描述**：{step.description}")
+        lines.append("")
+
+    # Field values
+    fields = step.get_fields()
+    values = step.get_values()
+    if fields and values:
+        lines.append("**记录值**：")
+        lines.append("")
+        for f in fields:
+            val = values.get(f.key, "")
+            default = f.default
+            if val and str(val) != str(default):
+                lines.append(f"- {f.label}：**{val}**（默认：{default}）⚠️ 已修改")
+            elif val:
+                lines.append(f"- {f.label}：{val}")
+            else:
+                lines.append(f"- {f.label}：*(未填写)*")
+        lines.append("")
+
+    # Timer info
+    if step.timer_seconds > 0 or step.timer_override_seconds is not None:
+        planned = step.timer_override_seconds if step.timer_override_seconds is not None \
+                  else step.timer_seconds
+        lines.append("**计时**：")
+        lines.append("")
+
+        if step.timer_finished_at:
+            lines.append(f"- 计划时长：{_fmt_seconds(planned)}")
+            lines.append(f"- 计时结束：{_fmt_dt(step.timer_finished_at)}")
+            if step.overtime_seconds > 0:
+                lines.append(
+                    f"- 超时确认：+{_fmt_seconds(step.overtime_seconds)} "
+                    f"（用户于 {_fmt_dt(step.completed_at or step.timer_finished_at)} 确认）"
+                )
+            else:
+                lines.append("- ✅ 按时完成")
+        else:
+            lines.append(f"- 计划时长：{_fmt_seconds(planned)}")
+            if step.timer_override_seconds is not None and step.timer_override_seconds != step.timer_seconds:
+                lines.append(f"  *(原始：{_fmt_seconds(step.timer_seconds)}，已修改)*")
+        lines.append("")
+
+    # Photos
+    photo_paths = step.get_photo_paths()
+    if photo_paths:
+        lines.append("**照片**：")
+        lines.append("")
+        for i, path in enumerate(photo_paths, 1):
+            lines.append(f"- 照片 {i}：`{path}`")
+            lines.append("")
+            lines.append(f"![照片 {i}](../photos/{path})")
+            lines.append("")
+        lines.append("")
+    elif step.has_camera and step.photo_pending:
+        lines.append("**照片**：⚠️ 已跳过（待补）")
+        lines.append("")
+
+    # Completion time
+    if step.completed_at:
+        lines.append(f"**完成时间**：{_fmt_dt(step.completed_at)}")
+        lines.append("")
+
+    return lines
+
+
+# ─────────────────────────────────────────────
+# Storage table
+# ─────────────────────────────────────────────
+
+def _render_storage_table(items: list[StorageItem],
+                           boxes: dict[int, Box]) -> list[str]:
+    lines: list[str] = []
+    lines.append("| 样品 | 管型 | Box | 位置 | 备注 |")
+    lines.append("|------|------|-----|------|------|")
+    for item in items:
+        box_name = boxes[item.box_id].box_name if item.box_id and item.box_id in boxes else "—"
+        position = item.position or "—"
+        notes = item.notes or "—"
+        lines.append(
+            f"| {item.item_label} | {item.tube_type or '—'} "
+            f"| {box_name} | {position} | {notes} |"
+        )
+    return lines
+
+
+# ─────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────
+
+def _fmt_dt(iso_str: Optional[str]) -> str:
+    if not iso_str:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(tz=None)  # local time
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return iso_str
+
+
+def _fmt_seconds(seconds: int) -> str:
+    if seconds <= 0:
+        return "0 秒"
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    parts = []
+    if h:
+        parts.append(f"{h} 小时")
+    if m:
+        parts.append(f"{m} 分钟")
+    if s:
+        parts.append(f"{s} 秒")
+    return " ".join(parts)
+
+
+def _status_label(status: str) -> str:
+    return {
+        "active": "进行中",
+        "needs_wrapup": "待收尾",
+        "completed": "已完成",
+        "archived": "已归档",
+    }.get(status, status)

@@ -1,0 +1,367 @@
+"""
+ELN App — Settings View
+Server IP config, connection test, notification permissions, about.
+"""
+
+from __future__ import annotations
+import platform
+import flet as ft
+from typing import Callable, Optional
+
+def _open_overlay(page, ctrl):
+    """Open a dialog/snackbar compatible with flet 0.70+."""
+    if ctrl not in page.overlay:
+        page.overlay.append(ctrl)
+    ctrl.open = True
+    page.update()
+
+def _close_overlay(page, ctrl):
+    """Close a dialog/snackbar compatible with flet 0.70+."""
+    ctrl.open = False
+    page.update()
+
+
+
+
+def build_settings_view(
+    page: ft.Page,
+    is_mobile: bool = True,
+    on_server_url_changed: Optional[Callable[[str], None]] = None,
+) -> ft.Control:
+
+    import utils.api_client as api_client
+    from server.startup import get_local_ip, is_server_running
+
+    # ── Server IP (mobile only) ──────────────────
+    current_url = api_client.get_base_url()
+    tf_server_url = ft.TextField(
+        value=current_url,
+        label="服务器地址",
+        hint_text="http://192.168.1.100:8000",
+        keyboard_type=ft.KeyboardType.URL,
+        visible=is_mobile,
+        border_color=ft.Colors.ORANGE_300,
+        focused_border_color=ft.Colors.ORANGE_600,
+    )
+
+    conn_status = ft.Text("", size=13)
+
+    def _test_connection(_):
+        url = tf_server_url.value.strip()
+        if not url:
+            conn_status.value = "请输入服务器地址"
+            conn_status.color = ft.Colors.RED_400
+            page.update()
+            return
+
+        api_client.set_base_url(url)
+        conn_status.value = "连接测试中…"
+        conn_status.color = ft.Colors.GREY_500
+        page.update()
+
+        ok = api_client.check_connection()
+        if ok:
+            conn_status.value = "✅ 连接成功"
+            conn_status.color = ft.Colors.GREEN_600
+            if on_server_url_changed:
+                on_server_url_changed(url)
+            page.client_storage.set("server_url", url)
+        else:
+            conn_status.value = "❌ 连接失败，请检查 IP 和端口"
+            conn_status.color = ft.Colors.RED_400
+        page.update()
+
+    def _save_url(_):
+        url = tf_server_url.value.strip()
+        if url:
+            api_client.set_base_url(url)
+            page.client_storage.set("server_url", url)
+            if on_server_url_changed:
+                on_server_url_changed(url)
+            _open_overlay(page, ft.SnackBar(content=ft.Text("已保存")))
+            page.update()
+
+    # ── Notification test (defined BEFORE it is referenced below) ────────────
+    def _test_notification(_):
+        from notifications import notify_timer_finished
+        notify_timer_finished("测试步骤", "测试实验")
+        _open_overlay(page, ft.SnackBar(content=ft.Text("通知已发送")))
+        page.update()
+
+    # ── Local server info (desktop/Windows) ──────
+    local_ip = ""
+    server_running = False
+    try:
+        local_ip = get_local_ip()
+        server_running = is_server_running()
+    except Exception:
+        pass
+
+    server_info = ft.Container(
+        content=ft.Column([
+            ft.Text("本机服务器", size=14, weight=ft.FontWeight.W_500),
+            ft.Row([
+                ft.Icon(
+                    ft.Icons.CIRCLE,
+                    size=10,
+                    color=ft.Colors.GREEN_600 if server_running else ft.Colors.RED_400,
+                ),
+                ft.Text(
+                    "运行中" if server_running else "未运行",
+                    size=13,
+                    color=ft.Colors.GREEN_600 if server_running else ft.Colors.RED_400,
+                ),
+            ], spacing=6),
+            ft.Text(f"局域网地址：http://{local_ip}:8000",
+                    size=13, color=ft.Colors.GREY_600,
+                    selectable=True),
+            ft.Text("在 iPhone 上输入此地址连接",
+                    size=12, color=ft.Colors.GREY_400),
+        ], spacing=6),
+        border=ft.Border.all(1, ft.Colors.GREY_200),
+        border_radius=8,
+        padding=12,
+        visible=not is_mobile,
+    )
+
+    # ── Notification permission ───────────────────
+    notif_section = ft.Container(
+        content=ft.Column([
+            ft.Text("通知设置", size=14, weight=ft.FontWeight.W_500),
+            ft.Text("计时结束时发送系统通知和提示音",
+                    size=12, color=ft.Colors.GREY_600),
+            ft.ElevatedButton(
+                "测试通知",
+                on_click=_test_notification,
+                bgcolor=ft.Colors.ORANGE_600,
+                color=ft.Colors.WHITE,
+                height=32,
+            ),
+        ], spacing=8),
+        border=ft.Border.all(1, ft.Colors.GREY_200),
+        border_radius=8,
+        padding=12,
+    )
+
+    protocol_help_text = """用途
+Protocol 是一个 JSON 模板，用来告诉 ELN App 一个实验有哪些步骤、每步要记录哪些数据、是否需要计时、是否需要拍照。把 protocol 保存到协议库后，可以从它新建实验。新建实验时，程序会把 protocol 复制成该实验的运行快照，所以之后编辑协议库不会自动改变已经创建的实验。
+
+顶层结构
+必须是一个 JSON object，推荐字段如下：
+- protocol_name: 协议名称，必填，显示在协议库和新建实验流程里。
+- version: 版本，可选，建议写字符串，例如 "1.0"。
+- author: 作者，可选。
+- steps: 步骤数组，必填，至少 1 个步骤。
+- storage_items: 预设储存物品数组，可选。只有实验前已经知道要存什么时才写。实验结束后也可以临时添加本次实际要存的物品。
+
+步骤 steps 的写法
+每个 step 是一个 object：
+- title: 步骤标题，必填。
+- description: 步骤说明，必填。说明里的数字会在界面中变成可点击修改的橙色数字，例如 20 µL、100V、30 分钟。
+- timer_seconds: 计时秒数。0 或 null 表示没有计时器。30 分钟写 1800，2 小时写 7200。
+- has_camera: true/false，表示该步骤是否有拍照记录区。
+- camera_required: true/false，表示照片是否原则上必需。即使必需，也允许先跳过，实验进入待收尾状态。
+- fields: 记录字段数组。没有要填写的内容就写 []。
+
+字段 fields 的写法
+每个 field 是一个 object：
+- key: 程序内部保存用的唯一英文 key。只能在同一步里唯一，建议用小写英文加下划线，例如 template_volume。
+- label: 给人看的中文名称，例如 模板用量 (µL)。
+- type: 字段类型，只支持 "text"、"number"、"dropdown"。
+- default: 默认值，建议都写成字符串。没有默认值就写 ""。
+- required: true/false，true 表示完成步骤前必须填写。
+- options: 只有 dropdown 需要，写可选项数组；text 和 number 写 [] 即可。
+
+预设储存物品 storage_items
+如果实验前已经确定结束后要登记某些样品位置，可以在顶层写 storage_items。每个 item 是一个 object：
+- key: 程序内部 key，英文或下划线，例如 pcr_product。
+- label: 样品显示名称，例如 PCR 产物。
+- tube_type: 管型，例如 1.5mL EP管、冻存管。
+- default_box: 默认 Box 名称，可留空。当前只是记录提示，不会强制自动选中。
+- notes_template: 默认备注，可留空。
+
+实验结束临时添加储存物品
+更推荐真实实验使用这个方式：做完实验后，程序会询问这次是否有东西要储存。输入格式是一行一个：
+名称 | 管型 | 备注
+例如：
+PCR 产物 | 1.5mL EP管 | sample A
+菌液甘油管 | 冻存管 | strain X
+也可以只写名称：
+PCR 产物
+添加后，程序会逐个询问放到哪个 Box、哪个位置。先选择 Box，再点击网格里的位置。
+
+完整示例
+{
+  "protocol_name": "Colony PCR",
+  "version": "1.0",
+  "author": "Yanchang",
+  "storage_items": [
+    {
+      "key": "pcr_product",
+      "label": "PCR 产物",
+      "tube_type": "1.5mL EP管",
+      "default_box": "PCR_Box",
+      "notes_template": "PCR product"
+    }
+  ],
+  "steps": [
+    {
+      "title": "配制 PCR 反应体系",
+      "description": "在冰上配制以下反应体系（总体积 20 µL）",
+      "timer_seconds": 0,
+      "has_camera": false,
+      "camera_required": false,
+      "fields": [
+        {
+          "key": "polymerase",
+          "label": "DNA 聚合酶",
+          "type": "text",
+          "default": "Phanta Max",
+          "required": true,
+          "options": []
+        },
+        {
+          "key": "template_volume",
+          "label": "模板用量 (µL)",
+          "type": "number",
+          "default": "1",
+          "required": true,
+          "options": []
+        }
+      ]
+    },
+    {
+      "title": "PCR 扩增",
+      "description": "将反应管放入 PCR 仪，运行 30 分钟",
+      "timer_seconds": 1800,
+      "has_camera": false,
+      "camera_required": false,
+      "fields": [
+        {
+          "key": "annealing_temp",
+          "label": "实测退火温度 (°C)",
+          "type": "number",
+          "default": "60",
+          "required": false,
+          "options": []
+        }
+      ]
+    },
+    {
+      "title": "琼脂糖凝胶电泳",
+      "description": "取 5 µL PCR 产物上样，100V 跑胶 30 分钟",
+      "timer_seconds": 1800,
+      "has_camera": true,
+      "camera_required": false,
+      "fields": [
+        {
+          "key": "band_size",
+          "label": "目的条带大小 (bp)",
+          "type": "number",
+          "default": "",
+          "required": false,
+          "options": []
+        },
+        {
+          "key": "result",
+          "label": "结果判断",
+          "type": "dropdown",
+          "default": "阳性",
+          "required": true,
+          "options": ["阳性", "阴性", "非特异性扩增"]
+        }
+      ]
+    }
+  ]
+}
+
+给 AI 生成 protocol 时可以这样要求
+请把下面实验流程整理成 ELN App protocol JSON。必须输出合法 JSON，不要 Markdown。顶层包含 protocol_name、version、author、steps。每个 step 包含 title、description、timer_seconds、has_camera、camera_required、fields。fields 的 type 只能是 text、number、dropdown。若实验前已确定要储存的样品，加入 storage_items；若不确定，storage_items 写 []。
+
+常见错误
+- 不要在 JSON 里写注释。
+- true/false 要小写，不要写 True/False。
+- 字符串必须用双引号。
+- timer_seconds 必须是秒数，不是分钟数。
+- dropdown 必须提供 options。
+- required 只控制能否完成步骤，不会自动生成默认值。
+- description 里的数字修改只影响本次实验，不会改协议库模板。
+"""
+
+    protocol_help = ft.Container(
+        content=ft.Column([
+            ft.Text("Protocol 语法帮助", size=14, weight=ft.FontWeight.W_500),
+            ft.Text(
+                protocol_help_text,
+                size=12,
+                color=ft.Colors.GREY_700,
+                selectable=True,
+            ),
+        ], spacing=8),
+        border=ft.Border.all(1, ft.Colors.GREY_200),
+        border_radius=8,
+        padding=12,
+    )
+
+    # ── About ────────────────────────────────────
+    about_section = ft.Container(
+        content=ft.Column([
+            ft.Text("关于", size=14, weight=ft.FontWeight.W_500),
+            ft.Text("ELN App — 个人实验室笔记", size=13),
+            ft.Text(f"平台：{platform.system()} {platform.machine()}",
+                    size=12, color=ft.Colors.GREY_500),
+            ft.Text("数据存储：SQLite（本地）",
+                    size=12, color=ft.Colors.GREY_500),
+        ], spacing=4),
+        border=ft.Border.all(1, ft.Colors.GREY_200),
+        border_radius=8,
+        padding=12,
+    )
+
+    # ── Mobile: server URL section ────────────────
+    mobile_server_section = ft.Container(
+        content=ft.Column([
+            ft.Text("服务器连接", size=14, weight=ft.FontWeight.W_500),
+            tf_server_url,
+            ft.Row([
+                ft.ElevatedButton(
+                    "测试连接",
+                    on_click=_test_connection,
+                    bgcolor=ft.Colors.ORANGE_600,
+                    color=ft.Colors.WHITE,
+                    height=32,
+                ),
+                ft.OutlinedButton(
+                    "保存",
+                    on_click=_save_url,
+                    height=32,
+                ),
+            ], spacing=8),
+            conn_status,
+        ], spacing=8),
+        border=ft.Border.all(1, ft.Colors.GREY_200),
+        border_radius=8,
+        padding=12,
+        visible=is_mobile,
+    )
+
+    header = ft.Container(
+        content=ft.Text("设置", size=20, weight=ft.FontWeight.BOLD),
+        padding=ft.Padding.symmetric(horizontal=16, vertical=12),
+    )
+
+    return ft.Column([
+        ft.Divider(height=1, color=ft.Colors.GREY_200),
+        header,
+        ft.Container(
+            content=ft.Column([
+                mobile_server_section,
+                server_info,
+                notif_section,
+                protocol_help,
+                about_section,
+            ], spacing=12, scroll=ft.ScrollMode.AUTO),
+            padding=ft.Padding.symmetric(horizontal=16, vertical=8),
+            expand=True,
+        ),
+    ], expand=True, spacing=0)

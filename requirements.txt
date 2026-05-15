@@ -1,0 +1,21 @@
+# ELN App — Python dependencies
+# Install with: pip install -r requirements.txt
+
+# Core UI framework
+flet>=0.21.0
+
+# Web server (Windows data host)
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+
+# Notifications (Windows)
+# win10toast>=0.9  # optional, Windows only
+
+# Notifications (cross-platform fallback)
+# plyer>=2.1.0     # optional
+
+# Sound playback (cross-platform)
+# pygame>=2.5.0    # optional, for mp3 alert sound
+
+# Standard library only — no extra deps needed for:
+# sqlite3, json, threading, platform, re, datetime
