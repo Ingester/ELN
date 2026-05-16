@@ -168,7 +168,7 @@ def experiment_runner(experiment_id: Optional[int] = Query(None)):
     .progress { flex:1; height:6px; border-radius:999px; background:#e7e7e7; overflow:hidden; }
     .progress > div { height:100%; background:var(--orange); transition:width .2s ease; }
     .step-title { font-size:18px; font-weight:700; margin:4px 0 8px; }
-    .desc { line-height:1.55; color:#333; }
+    .desc { line-height:1.55; color:#333; white-space:pre-wrap; }
     .field { margin-top:12px; }
     .field label { display:block; color:#555; font-size:13px; margin-bottom:5px; }
     .field input, .field select, .field textarea { width:100%; border:1px solid #ddd; border-radius:8px; padding:11px; background:#fff; }

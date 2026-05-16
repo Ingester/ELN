@@ -291,7 +291,7 @@ def main(page: ft.Page) -> None:
                 _debug_log(f"route_error update failed route={route}: {type(fallback_ex).__name__}: {fallback_ex}")
 
     def _create_experiment_and_navigate(exp_params: dict) -> None:
-        """Create experiment from protocol dict and navigate to stepper."""
+        """Create experiment from protocol dict and open the native runner."""
         try:
             result = data_provider.create_experiment(
                 name=exp_params["name"],
@@ -299,13 +299,29 @@ def main(page: ft.Page) -> None:
                 protocol_id=exp_params.get("protocol_id"),
             )
             exp_id = result.id if hasattr(result, "id") else result["id"]
-            _navigate(ROUTE_STEPPER, {"experiment_id": exp_id})
+            page.launch_url(
+                ft.Url(
+                    f"{_native_runner_url()}/run?experiment_id={int(exp_id)}",
+                    target=ft.UrlTarget.SELF,
+                ),
+                web_popup_window_name=ft.UrlTarget.SELF,
+            )
         except Exception as e:
             _open_overlay(page, ft.SnackBar(                content=ft.Text(f"创建实验失败：{e}"),                bgcolor=ft.Colors.RED_400,            ))
 
     def _parse_protocol(json_str: str):
         from db.models import ProtocolDefinition
         return ProtocolDefinition.from_json(json_str)
+
+    def _native_runner_url() -> str:
+        configured = os.environ.get("ELN_API_PUBLIC_URL", "").rstrip("/")
+        if configured:
+            return configured
+        try:
+            from server.startup import get_local_ip
+            return f"http://{get_local_ip()}:8000"
+        except Exception:
+            return "http://127.0.0.1:8000"
 
     # ── Navigation bar ───────────────────────────
     _TAB_ROUTES = [ROUTE_HOME, ROUTE_PROTOCOLS, ROUTE_BOX, ROUTE_SETTINGS]
