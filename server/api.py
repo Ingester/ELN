@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -180,7 +180,6 @@ def experiment_runner(experiment_id: Optional[int] = Query(None)):
     input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
     .photos a { color:var(--orange); margin-right:10px; }
     .small { color:var(--muted); font-size:12px; }
-    .inline-num { color:var(--orange); text-decoration:underline; background:transparent; border:0; padding:0; border-radius:0; font-weight:700; }
     .timer { border:1px solid #ffd8a8; background:#fff8ef; border-radius:10px; padding:12px; margin-top:12px; }
     .timer-display { font-size:32px; font-weight:800; color:var(--orange); letter-spacing:0; }
     .timer-edit { display:flex; gap:8px; align-items:end; }
@@ -626,44 +625,8 @@ function collectValues(stepId){
 function saveDraft(stepId){ localStorage.setItem(draftKey(stepId), JSON.stringify(collectValues(stepId))); }
 function status(stepId, text){ const el=document.getElementById("status-"+stepId); if(el) el.textContent=text; }
 
-const UNIT_RE = /(\\d+(?:\\.\\d+)?)\\s*(ng\\/µL|ng\\/uL|ng\\/μL|U\\/µL|U\\/uL|µL|uL|μL|mL|°C|℃|分钟|秒|小时|循环|cycles?|min|sec|hr|rpm|rcf|bp|kb|nM|µM|uM|μM|mM|ng|µg|ug|μg|mg|V|L|M\\b|g\\b|s\\b|h\\b|x\\b|×|%)?/g;
-
 function renderDescription(step){
-  const overrides = mergedOverrides(step);
-  const text = step.description || "";
-  let html = "", pos = 0, match;
-  UNIT_RE.lastIndex = 0;
-  while((match = UNIT_RE.exec(text)) !== null){
-    const [full, number] = match;
-    const unit = match[2] || "";
-    html += esc(text.slice(pos, match.index));
-    const rawKey = number + unit;
-    const display = overrides[rawKey] ?? number;
-    html += `<button class="inline-num" data-step="${step.id}" data-key="${esc(rawKey)}" data-number="${esc(number)}" data-unit="${esc(unit)}" onclick="editDescNumber(this)">${esc(display + unit)}</button>`;
-    pos = match.index + full.length;
-  }
-  html += esc(text.slice(pos));
-  return html;
-}
-
-function editDescNumber(btn){
-  const stepId = btn.dataset.step;
-  const key = btn.dataset.key;
-  const unit = btn.dataset.unit || "";
-  const overrides = JSON.parse(localStorage.getItem(descKey(stepId)) || "{}");
-  const current = overrides[key] ?? btn.dataset.number ?? "";
-  const next = prompt(`修改数值（${unit}）`, current);
-  if(next === null) return;
-  if(!next.trim() || Number.isNaN(Number(next))){
-    status(stepId, "请输入有效数字");
-    return;
-  }
-  overrides[key] = next.trim();
-  localStorage.setItem(descKey(stepId), JSON.stringify(overrides));
-  enqueue({type:"patchStep", stepId:Number(stepId), payload: patchPayload(stepId)});
-  status(stepId, "描述数字已存本地，等待同步");
-  renderSteps(steps);
-  syncNow();
+  return esc(step.description || "");
 }
 
 function saveTimerOverride(expId, stepId, minutes){
@@ -679,8 +642,6 @@ function saveTimerOverride(expId, stepId, minutes){
 
 function patchPayload(stepId){
   const body = {values_json: JSON.stringify(collectValues(stepId))};
-  const descRaw = localStorage.getItem(descKey(stepId));
-  if(descRaw) body.description_overrides_json = descRaw;
   const timerRaw = localStorage.getItem(timerKey(stepId));
   if(timerRaw !== null && timerRaw !== "") body.timer_override_seconds = Math.max(0, parseInt(timerRaw, 10) || 0);
   return body;
@@ -1567,7 +1528,7 @@ def _redirect_html(url: str, message: str = "正在返回") -> HTMLResponse:
 
 
 @app.get("/run/storage/{exp_id}", response_class=HTMLResponse)
-def run_storage_page(exp_id: int):
+def run_storage_page(exp_id: int, msg: str = Query(""), error: str = Query("")):
     exp = db_ops.get_experiment(exp_id)
     if not exp:
         raise HTTPException(404, "Experiment not found")
@@ -1591,6 +1552,12 @@ def run_storage_page(exp_id: int):
     if not item_cards:
         item_cards.append('<p class="muted">还没有储存物品。可以在下面添加，每行一个。</p>')
 
+    notice = ""
+    if msg:
+        notice = f'<div class="notice ok">{_html_escape(msg)}</div>'
+    elif error:
+        notice = f'<div class="notice error">{_html_escape(error)}</div>'
+
     return HTMLResponse(f"""
 <!doctype html>
 <html lang="zh-CN">
@@ -1613,6 +1580,9 @@ def run_storage_page(exp_id: int):
     button.green {{ background:var(--green); }}
     .actions {{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:12px; }}
     .muted {{ color:var(--muted); font-size:13px; }}
+    .notice {{ border-radius:10px; padding:12px 14px; font-weight:600; }}
+    .notice.ok {{ background:#e9f7ec; color:#2e7d32; border:1px solid #b7dfbf; }}
+    .notice.error {{ background:#fff0f0; color:#c62828; border:1px solid #ffc7c7; }}
     textarea, input, select {{ width:100%; border:1px solid #ddd; border-radius:8px; padding:10px; background:white; }}
     textarea {{ min-height:110px; resize:vertical; }}
     .grid-layout {{ display:grid; grid-template-columns:minmax(260px, 360px) 1fr; gap:14px; align-items:start; }}
@@ -1633,11 +1603,12 @@ def run_storage_page(exp_id: int):
     <a class="button secondary" href="/run/report/{exp_id}">查看报告</a>
   </header>
   <main>
+    {notice}
     <section>
       <h2>添加要储存的物品</h2>
       <p class="muted">每行一个物品。推荐格式：样品名 | 管型 | 备注。也可以只写样品名。</p>
       <form method="post" action="/run/storage/{exp_id}/add">
-        <textarea name="items" placeholder="PCR 产物 Colony #1 | 1.5mL EP管 | 需要冻存"></textarea>
+        <textarea name="items" required placeholder="PCR 产物 Colony #1 | 1.5mL EP管 | 需要冻存"></textarea>
         <div class="actions"><button type="submit">添加物品</button></div>
       </form>
     </section>
@@ -1747,6 +1718,7 @@ async def run_storage_add(exp_id: int, request: Request):
         raise HTTPException(404, "Experiment not found")
     form = await request.form()
     raw = str(form.get("items", "")).strip()
+    added = 0
     for line in raw.splitlines():
         line = line.strip()
         if not line:
@@ -1758,7 +1730,16 @@ async def run_storage_add(exp_id: int, request: Request):
         tube = parts[1] if len(parts) > 1 else ""
         notes = parts[2] if len(parts) > 2 else ""
         db_ops.create_storage_item(exp_id, item_label=label, tube_type=tube, notes_template=notes)
-    return _redirect_html(f"/run/storage/{exp_id}", "储存物品已添加")
+        added += 1
+    if added <= 0:
+        return RedirectResponse(
+            f"/run/storage/{exp_id}?error={quote('没有输入可添加的储存物品')}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        f"/run/storage/{exp_id}?msg={quote(f'已添加 {added} 个储存物品')}",
+        status_code=303,
+    )
 
 
 @app.post("/run/storage/{exp_id}/box/add", response_class=HTMLResponse)
@@ -1770,7 +1751,14 @@ async def run_storage_box_add(exp_id: int, request: Request):
     size = int(str(form.get("box_size", "10")) or "10")
     if name:
         db_ops.create_box(name, box_size=9 if size == 9 else 10)
-    return _redirect_html(f"/run/storage/{exp_id}", "Box 已更新")
+        return RedirectResponse(
+            f"/run/storage/{exp_id}?msg={quote('Box 已新建')}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        f"/run/storage/{exp_id}?error={quote('请输入 Box 名称')}",
+        status_code=303,
+    )
 
 
 @app.post("/run/storage/{exp_id}/register", response_class=HTMLResponse)
@@ -1782,7 +1770,10 @@ async def run_storage_register(exp_id: int, request: Request):
     box_id = int(str(form.get("box_id", "0")) or "0")
     position = str(form.get("position", "")).strip().upper()
     if not item_id or not box_id or len(position) < 2:
-        return _redirect_html(f"/run/storage/{exp_id}", "登记信息不完整")
+        return RedirectResponse(
+            f"/run/storage/{exp_id}?error={quote('登记信息不完整，请选择 Box 和位置')}",
+            status_code=303,
+        )
     notes = str(form.get("notes", "")).strip()
     db_ops.register_storage_item(
         item_id=item_id,
@@ -1792,7 +1783,10 @@ async def run_storage_register(exp_id: int, request: Request):
         notes=notes,
         exp_id=exp_id,
     )
-    return _redirect_html(f"/run/storage/{exp_id}", "位置已登记")
+    return RedirectResponse(
+        f"/run/storage/{exp_id}?msg={quote('位置已登记')}",
+        status_code=303,
+    )
 
 
 @app.post("/run/storage/{exp_id}/finish", response_class=HTMLResponse)
