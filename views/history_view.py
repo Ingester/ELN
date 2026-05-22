@@ -5,6 +5,7 @@ Accessible from Home top-right icon.
 """
 
 from __future__ import annotations
+from datetime import datetime
 import flet as ft
 from typing import Callable
 
@@ -73,7 +74,7 @@ def build_history_view(
         exp_id = _get(exp, "id")
         name = _get(exp, "name", "实验")
         status = _get(exp, "status", "completed")
-        created = (_get(exp, "created_at", "") or "")[:10]
+        created = _fmt_dt(_get(exp, "created_at", ""))
         progress = {}
         if not isinstance(exp, dict):
             try:
@@ -82,9 +83,14 @@ def build_history_view(
                 progress = {}
         total = _get(exp, "total_steps", progress.get("total_steps", 0))
         completed_steps = _get(exp, "completed_steps", progress.get("completed_steps", 0))
+        completed_at = _get(exp, "completed_at", progress.get("completed_at", ""))
 
         status_color = ft.Colors.GREEN_600 if status == "completed" else ft.Colors.GREY_500
         status_label = "已完成" if status == "completed" else "已归档"
+        time_parts = [f"创建：{created or '—'}"]
+        if completed_at:
+            time_parts.append(f"结束：{_fmt_dt(completed_at)}")
+        time_parts.append(f"{completed_steps}/{total} 步")
 
         return ft.Container(
             content=ft.Row([
@@ -98,7 +104,7 @@ def build_history_view(
                             border_radius=8,
                             padding=ft.Padding.symmetric(horizontal=6, vertical=2),
                         ),
-                        ft.Text(f"{created}  ·  {completed_steps}/{total} 步",
+                        ft.Text("  ·  ".join(time_parts),
                                 size=12, color=ft.Colors.GREY_500),
                     ], spacing=6),
                 ], expand=True, spacing=4),
@@ -159,6 +165,17 @@ def build_history_view(
 
     def _close_dlg(dlg):
         _close_overlay(page, dlg)
+
+    def _fmt_dt(value: str) -> str:
+        if not value:
+            return ""
+        try:
+            dt = datetime.fromisoformat(str(value))
+            if dt.tzinfo is not None:
+                dt = dt.astimezone()
+            return dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return str(value)[:16]
 
     header = ft.Row([
         ft.IconButton(ft.Icons.ARROW_BACK,

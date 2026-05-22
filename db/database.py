@@ -798,7 +798,7 @@ def _safe_filename(name: str) -> str:
 # ─────────────────────────────────────────────
 
 def get_experiment_progress(experiment_id: int) -> dict[str, Any]:
-    """Return {total_steps, completed_steps, current_step_index}."""
+    """Return progress and the last completed step time."""
     with db_conn() as conn:
         total = conn.execute(
             "SELECT COUNT(*) FROM steps WHERE experiment_id=?", (experiment_id,)
@@ -807,6 +807,10 @@ def get_experiment_progress(experiment_id: int) -> dict[str, Any]:
             "SELECT COUNT(*) FROM steps WHERE experiment_id=? AND completed_at IS NOT NULL",
             (experiment_id,)
         ).fetchone()[0]
+        completed_at_row = conn.execute(
+            "SELECT MAX(completed_at) FROM steps WHERE experiment_id=? AND completed_at IS NOT NULL",
+            (experiment_id,)
+        ).fetchone()
         # First incomplete step
         row = conn.execute(
             "SELECT step_index FROM steps WHERE experiment_id=? AND completed_at IS NULL "
@@ -814,4 +818,10 @@ def get_experiment_progress(experiment_id: int) -> dict[str, Any]:
             (experiment_id,)
         ).fetchone()
     current = row[0] if row else (total - 1 if total > 0 else 0)
-    return {"total_steps": total, "completed_steps": completed, "current_step_index": current}
+    completed_at = completed_at_row[0] if completed_at_row else None
+    return {
+        "total_steps": total,
+        "completed_steps": completed,
+        "current_step_index": current,
+        "completed_at": completed_at,
+    }
