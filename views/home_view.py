@@ -14,6 +14,8 @@ import flet as ft
 from typing import Callable, Optional
 
 from timer_manager import get_timer_manager, TimerState
+from utils.app_settings import is_english
+from utils.i18n import tr
 
 
 def _debug_log(message: str) -> None:
@@ -44,6 +46,7 @@ def build_home_view(
     """Build and return the Home view control."""
 
     tm = get_timer_manager()
+    english = is_english()
     _timer_refs: dict[int, dict[str, ft.Control]] = {}
     _navigating = [False]
     status_text = ft.Text("", size=12, color=ft.Colors.ORANGE_700)
@@ -70,7 +73,7 @@ def build_home_view(
         cards.append(
             ft.Container(
                 content=ft.TextButton(
-                    "+ 从协议库新建实验",
+                    tr("+ 从协议库新建实验"),
                     on_click=lambda _: on_open_protocols(),
                     style=ft.ButtonStyle(color=ft.Colors.ORANGE_600),
                 ),
@@ -93,7 +96,7 @@ def build_home_view(
         total = _get(exp, "total_steps", progress.get("total_steps", 0))
         completed = _get(exp, "completed_steps", progress.get("completed_steps", 0))
         current_idx = _get(exp, "current_step_index", progress.get("current_step_index", 0))
-        status_label = "待收尾" if status == "needs_wrapup" else "进行中"
+        status_label = tr("待收尾") if status == "needs_wrapup" else tr("进行中")
         status_color = ft.Colors.BLUE_600 if status == "needs_wrapup" else ft.Colors.ORANGE_600
 
         # Timer status line
@@ -125,7 +128,7 @@ def build_home_view(
             ft.Row([
                 ft.Container(expand=True),
                 ft.ElevatedButton(
-                    "继续 →",
+                    tr("继续 →"),
                     url=ft.Url(
                         f"{_native_runner_url()}/run?experiment_id={int(exp_id)}",
                         target=ft.UrlTarget.SELF,
@@ -183,7 +186,7 @@ def build_home_view(
             return {
                 "visible": True,
                 "icon": ft.Icons.ERROR_OUTLINE,
-                "text": f"超时中：+{mins:02d}:{secs:02d}",
+                "text": f"{'Overtime' if english else '超时中'}: +{mins:02d}:{secs:02d}",
                 "color": ft.Colors.RED_600,
             }
         elif state.status == "paused":
@@ -192,7 +195,7 @@ def build_home_view(
             return {
                 "visible": True,
                 "icon": ft.Icons.PAUSE_CIRCLE_OUTLINE,
-                "text": f"已暂停 {mins:02d}:{secs:02d}",
+                "text": f"{'Paused' if english else '已暂停'} {mins:02d}:{secs:02d}",
                 "color": ft.Colors.GREY_600,
             }
         else:
@@ -201,7 +204,7 @@ def build_home_view(
             return {
                 "visible": True,
                 "icon": ft.Icons.TIMER_OUTLINED,
-                "text": f"剩余 {mins:02d}:{secs:02d}",
+                "text": f"{'Remaining' if english else '剩余'} {mins:02d}:{secs:02d}",
                 "color": ft.Colors.ORANGE_600,
             }
 
@@ -232,11 +235,11 @@ def build_home_view(
             content=ft.Column([
                 ft.Icon(ft.Icons.SCIENCE_OUTLINED, size=64,
                         color=ft.Colors.GREY_300),
-                ft.Text("暂无进行中的实验", size=16,
+                ft.Text(tr("暂无进行中的实验"), size=16,
                         color=ft.Colors.GREY_500,
                         text_align=ft.TextAlign.CENTER),
                 ft.ElevatedButton(
-                    "📄 打开协议库，开始新实验",
+                    tr("📄 打开协议库，开始新实验"),
                     on_click=lambda _: on_open_protocols(),
                     bgcolor=ft.Colors.ORANGE_600,
                     color=ft.Colors.WHITE,
@@ -251,7 +254,7 @@ def build_home_view(
 
     def _error_card(msg: str) -> ft.Container:
         return ft.Container(
-            content=ft.Text(f"加载失败：{msg}", color=ft.Colors.RED_400),
+            content=ft.Text(f"{tr('加载失败')}：{msg}", color=ft.Colors.RED_400),
             padding=16,
         )
 
@@ -270,17 +273,17 @@ def build_home_view(
 
     header = ft.Column([
         ft.Row([
-            ft.Text("实验室笔记", size=20, weight=ft.FontWeight.BOLD),
+            ft.Text(tr("实验室笔记"), size=20, weight=ft.FontWeight.BOLD),
             ft.Container(expand=True),
             ft.IconButton(
                 ft.Icons.HISTORY,
-                tooltip="历史记录",
+                tooltip=tr("历史记录"),
                 on_click=lambda _: on_open_history(),
                 icon_color=ft.Colors.GREY_600,
             ),
             ft.IconButton(
                 ft.Icons.REFRESH,
-                tooltip="刷新",
+                tooltip=tr("刷新"),
                 on_click=_refresh,
                 icon_color=ft.Colors.GREY_600,
             ),

@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 import flet as ft
 from typing import Callable
+from utils.i18n import tr
 
 
 def _get(obj, key: str, default=None):
@@ -49,7 +50,7 @@ def build_history_view(
             all_exps  = completed + archived
         except Exception as e:
             list_col.controls.append(
-                ft.Text(f"加载失败：{e}", color=ft.Colors.RED_400)
+                ft.Text(f"{tr('加载失败')}：{e}", color=ft.Colors.RED_400)
             )
             page.update()
             return
@@ -59,7 +60,7 @@ def build_history_view(
                 ft.Container(
                     content=ft.Column([
                         ft.Icon(ft.Icons.HISTORY, size=64, color=ft.Colors.GREY_300),
-                        ft.Text("暂无历史记录", size=16, color=ft.Colors.GREY_500,
+                        ft.Text(tr("暂无历史记录"), size=16, color=ft.Colors.GREY_500,
                                 text_align=ft.TextAlign.CENTER),
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
                     alignment=ft.Alignment.CENTER, padding=40,
@@ -86,11 +87,11 @@ def build_history_view(
         completed_at = _get(exp, "completed_at", progress.get("completed_at", ""))
 
         status_color = ft.Colors.GREEN_600 if status == "completed" else ft.Colors.GREY_500
-        status_label = "已完成" if status == "completed" else "已归档"
-        time_parts = [f"创建：{created or '—'}"]
+        status_label = tr("已完成") if status == "completed" else tr("已归档")
+        time_parts = [f"{tr('创建：')}{created or '—'}"]
         if completed_at:
-            time_parts.append(f"结束：{_fmt_dt(completed_at)}")
-        time_parts.append(f"{completed_steps}/{total} 步")
+            time_parts.append(f"{tr('结束：')}{_fmt_dt(completed_at)}")
+        time_parts.append(f"{completed_steps}/{total} {tr('步')}")
 
         return ft.Container(
             content=ft.Row([
@@ -111,13 +112,13 @@ def build_history_view(
                 ft.Row([
                     ft.IconButton(
                         ft.Icons.SUMMARIZE_OUTLINED,
-                        tooltip="查看报告",
+                        tooltip=tr("查看报告"),
                         on_click=lambda _, eid=exp_id: on_open_report(eid),
                         icon_color=ft.Colors.ORANGE_600,
                     ),
                     ft.IconButton(
                         ft.Icons.REPLAY,
-                        tooltip="重新使用协议",
+                        tooltip=tr("重新使用协议"),
                         on_click=lambda _, e=exp: _reuse_protocol(e),
                         icon_color=ft.Colors.GREY_600,
                     ),
@@ -134,14 +135,14 @@ def build_history_view(
         """Create a new experiment from the same protocol."""
         tf = ft.TextField(
             value=_get(exp, "name", "") + " (重复)",
-            label="新实验名称",
+            label=tr("新实验名称"),
             autofocus=True,
         )
 
         def _create(_):
             name = tf.value.strip()
             if not name:
-                tf.error_text = "请输入名称"
+                tf.error_text = tr("请输入名称")
                 page.update()
                 return
             _close_overlay(page, dlg)
@@ -152,11 +153,11 @@ def build_history_view(
             })
 
         dlg = ft.AlertDialog(
-            title=ft.Text("重新使用协议"),
+            title=ft.Text(tr("重新使用协议")),
             content=tf,
             actions=[
-                ft.TextButton("取消", on_click=lambda _: _close_dlg(dlg)),
-                ft.ElevatedButton("开始", on_click=_create,
+                ft.TextButton(tr("取消"), on_click=lambda _: _close_dlg(dlg)),
+                ft.ElevatedButton(tr("开始"), on_click=_create,
                                    bgcolor=ft.Colors.ORANGE_600,
                                    color=ft.Colors.WHITE),
             ],
@@ -180,8 +181,8 @@ def build_history_view(
     header = ft.Row([
         ft.IconButton(ft.Icons.ARROW_BACK,
                       on_click=lambda _: on_back(),
-                      tooltip="返回"),
-        ft.Text("历史记录", size=18, weight=ft.FontWeight.BOLD),
+                      tooltip=tr("返回")),
+        ft.Text(tr("历史记录"), size=18, weight=ft.FontWeight.BOLD),
         ft.Container(expand=True),
         ft.IconButton(ft.Icons.REFRESH,
                       on_click=lambda _: _load(),

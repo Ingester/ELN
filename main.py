@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 import flet as ft
+from utils.i18n import tr
 
 def _open_overlay(page, ctrl):
     """Open a dialog/snackbar compatible with flet 0.70+."""
@@ -496,22 +497,22 @@ def _build_mobile_nav(navigate_fn, tab_routes: list) -> ft.NavigationBar:
             ft.NavigationBarDestination(
                 icon=ft.Icons.HOME_OUTLINED,
                 selected_icon=ft.Icons.HOME,
-                label="首页",
+                label=tr("首页"),
             ),
             ft.NavigationBarDestination(
                 icon=ft.Icons.DESCRIPTION_OUTLINED,
                 selected_icon=ft.Icons.DESCRIPTION,
-                label="协议",
+                label=tr("协议"),
             ),
             ft.NavigationBarDestination(
                 icon=ft.Icons.INVENTORY_2_OUTLINED,
                 selected_icon=ft.Icons.INVENTORY_2,
-                label="Box",
+                label=tr("Box"),
             ),
             ft.NavigationBarDestination(
                 icon=ft.Icons.SETTINGS_OUTLINED,
                 selected_icon=ft.Icons.SETTINGS,
-                label="设置",
+                label=tr("设置"),
             ),
         ],
     )
@@ -540,27 +541,27 @@ def _build_desktop_rail(navigate_fn, tab_routes: list) -> ft.NavigationRail:
             ft.NavigationRailDestination(
                 icon=ft.Icons.HOME_OUTLINED,
                 selected_icon=ft.Icons.HOME,
-                label="首页",
+                label=tr("首页"),
             ),
             ft.NavigationRailDestination(
                 icon=ft.Icons.DESCRIPTION_OUTLINED,
                 selected_icon=ft.Icons.DESCRIPTION,
-                label="协议库",
+                label=tr("协议库"),
             ),
             ft.NavigationRailDestination(
                 icon=ft.Icons.INVENTORY_2_OUTLINED,
                 selected_icon=ft.Icons.INVENTORY_2,
-                label="Box",
+                label=tr("Box"),
             ),
             ft.NavigationRailDestination(
                 icon=ft.Icons.HISTORY,
                 selected_icon=ft.Icons.HISTORY,
-                label="历史",
+                label=tr("历史"),
             ),
             ft.NavigationRailDestination(
                 icon=ft.Icons.SETTINGS_OUTLINED,
                 selected_icon=ft.Icons.SETTINGS,
-                label="设置",
+                label=tr("设置"),
             ),
         ],
     )

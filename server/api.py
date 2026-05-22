@@ -21,6 +21,7 @@ from pydantic import BaseModel
 import db.database as db_ops
 from db.models import ProtocolDefinition
 from utils.report_generator import generate_report
+from utils.i18n import localize_html
 
 app = FastAPI(title="ELN API", version="1.0.0")
 
@@ -34,6 +35,11 @@ app.add_middleware(
 
 def _photos_dir() -> str:
     return db_ops.get_photos_dir()
+
+
+def _html_response(content: str, **kwargs) -> HTMLResponse:
+    """Return localized HTML for the native web pages."""
+    return HTMLResponse(localize_html(content), **kwargs)
 
 
 # Mount static photo files
@@ -142,7 +148,7 @@ def health():
 @app.get("/run", response_class=HTMLResponse)
 @app.get("/mobile", response_class=HTMLResponse)
 def experiment_runner(experiment_id: Optional[int] = Query(None)):
-    return HTMLResponse("""
+    return _html_response("""
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1234,7 +1240,7 @@ def web_upload_form(step_id: int):
         raise HTTPException(404, "Step not found")
     _write_eln_return_target(step.experiment_id, step_id)
     app_url = _eln_step_url(step.experiment_id, step_id)
-    return HTMLResponse(f"""
+    return _html_response(f"""
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1301,7 +1307,7 @@ def web_open_experiment(exp_id: int):
     if not exp:
         raise HTTPException(404, "Experiment not found")
     target = f"{_web_base_url()}/stepper/{exp_id}?t={int(time.time())}"
-    return HTMLResponse(f"""
+    return _html_response(f"""
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1353,7 +1359,7 @@ def web_edit_step_form(step_id: int):
         </label>
         """)
 
-    return HTMLResponse(f"""
+    return _html_response(f"""
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1407,7 +1413,7 @@ async def web_edit_step_save(step_id: int, request: Request):
     }
     db_ops.update_step(step_id, values_json=json.dumps(values, ensure_ascii=False))
     app_url = _eln_step_url(step.experiment_id, step_id)
-    return HTMLResponse(f"""
+    return _html_response(f"""
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1435,7 +1441,7 @@ async def web_upload_photo(step_id: int, file: UploadFile = File(...)):
     if step:
         _write_eln_return_target(step.experiment_id, step_id)
     app_url = _eln_step_url(step.experiment_id, step_id) if step else _web_base_url()
-    return HTMLResponse(f"""
+    return _html_response(f"""
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1510,7 +1516,7 @@ def _write_eln_return_target(experiment_id: int, step_id: int) -> None:
 
 def _redirect_html(url: str, message: str = "正在返回") -> HTMLResponse:
     safe_url = _html_escape(url)
-    return HTMLResponse(f"""
+    return _html_response(f"""
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1558,7 +1564,7 @@ def run_storage_page(exp_id: int, msg: str = Query(""), error: str = Query("")):
     elif error:
         notice = f'<div class="notice error">{_html_escape(error)}</div>'
 
-    return HTMLResponse(f"""
+    return _html_response(f"""
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1813,7 +1819,7 @@ def run_report_page(exp_id: int, saved: str = Query("")):
             </figure>
             """)
     saved_block = f'<p class="saved">已保存：{_html_escape(saved)}</p>' if saved else ""
-    return HTMLResponse(f"""
+    return _html_response(f"""
 <!doctype html>
 <html lang="zh-CN">
 <head>

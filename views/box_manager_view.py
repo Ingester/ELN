@@ -9,6 +9,7 @@ import flet as ft
 from typing import Callable, Optional
 
 from components.box_grid import BoxGrid
+from utils.i18n import tr
 
 
 def _get(obj, key: str, default=None):
@@ -48,11 +49,11 @@ def build_box_manager_view(
     detail_container = ft.Container(expand=True, visible=False)
     _showing_detail: list[bool] = [False]
     _editing_box_id: list[Optional[int]] = [None]
-    form_title = ft.Text("新建 Box", size=14, weight=ft.FontWeight.W_600)
-    form_name = ft.TextField(label="Box 名称", dense=True, expand=True)
+    form_title = ft.Text(tr("新建 Box"), size=14, weight=ft.FontWeight.W_600)
+    form_name = ft.TextField(label=tr("Box 名称"), dense=True, expand=True)
     form_size = ft.Dropdown(
         value="10",
-        label="尺寸",
+        label=tr("尺寸"),
         options=[ft.dropdown.Option("9", "9×9"),
                  ft.dropdown.Option("10", "10×10")],
         width=130,
@@ -63,8 +64,8 @@ def build_box_manager_view(
     _active_box_id: list[Optional[int]] = [None]
     _active_slot: list = [None]
     slot_title = ft.Text("", size=14, weight=ft.FontWeight.W_600)
-    slot_sample = ft.TextField(label="样品名称", dense=True, expand=True)
-    slot_notes = ft.TextField(label="备注", dense=True, multiline=True, min_lines=1, max_lines=3, expand=True)
+    slot_sample = ft.TextField(label=tr("样品名称"), dense=True, expand=True)
+    slot_notes = ft.TextField(label=tr("备注"), dense=True, multiline=True, min_lines=1, max_lines=3, expand=True)
     slot_status = ft.Text("", size=12, color=ft.Colors.GREY_600)
     slot_panel = ft.Container(visible=False)
 
@@ -75,7 +76,7 @@ def build_box_manager_view(
             boxes = data_provider.list_boxes()
         except Exception as e:
             boxes_col.controls.append(
-                ft.Text(f"加载失败：{e}", color=ft.Colors.RED_400)
+                ft.Text(f"{tr('加载失败')}：{e}", color=ft.Colors.RED_400)
             )
             page.update()
             return
@@ -269,7 +270,7 @@ def build_box_manager_view(
     # ── Create / Edit box ────────────────────────
     def _new_box_form(size: int = 10):
         _editing_box_id[0] = None
-        form_title.value = "新建 Box"
+        form_title.value = tr("新建 Box")
         form_name.value = _next_box_name(size)
         form_size.value = str(size)
         form_name.error_text = None
@@ -296,7 +297,7 @@ def build_box_manager_view(
 
     def _show_box_form(box_id: Optional[int], name: str, size: int):
         _editing_box_id[0] = box_id
-        form_title.value = "新建 Box" if box_id is None else "编辑 Box"
+        form_title.value = tr("新建 Box") if box_id is None else tr("编辑 Box")
         form_name.value = name
         form_name.error_text = None
         form_size.value = str(size or 10)
@@ -357,13 +358,13 @@ def build_box_manager_view(
             content=ft.Column([
                 ft.Icon(ft.Icons.INVENTORY_2_OUTLINED, size=64,
                         color=ft.Colors.GREY_300),
-                ft.Text("暂无 Box", size=16, color=ft.Colors.GREY_500,
+                ft.Text(tr("暂无 Box"), size=16, color=ft.Colors.GREY_500,
                         text_align=ft.TextAlign.CENTER),
-                ft.ElevatedButton("+ 新建 10×10 Box", on_click=lambda _: _new_box_form(10),
+                ft.ElevatedButton("+ " + tr("新建 Box") + " 10×10", on_click=lambda _: _new_box_form(10),
                                    bgcolor=ft.Colors.ORANGE_600,
                                    color=ft.Colors.WHITE),
-                ft.OutlinedButton("+ 新建 9×9 Box", on_click=lambda _: _new_box_form(9)),
-                ft.Text("点击 Box 卡片进入格子视图",
+                ft.OutlinedButton("+ " + tr("新建 Box") + " 9×9", on_click=lambda _: _new_box_form(9)),
+                ft.Text(tr("点击 Box 卡片进入格子视图"),
                         size=12, color=ft.Colors.GREY_500),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
             alignment=ft.Alignment.CENTER, padding=40,
@@ -398,7 +399,7 @@ def build_box_manager_view(
 
     # ── Header ──────────────────────────────────
     header = ft.Row([
-        ft.Text("Box 管理", size=20, weight=ft.FontWeight.BOLD),
+        ft.Text(tr("Box 管理"), size=20, weight=ft.FontWeight.BOLD),
         ft.Container(expand=True),
         _box_create_buttons(),
         ft.IconButton(ft.Icons.REFRESH, on_click=lambda _: _load(),

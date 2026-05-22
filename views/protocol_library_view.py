@@ -7,6 +7,7 @@ Actions: New Experiment, Edit, Duplicate, Delete, Import.
 from __future__ import annotations
 import flet as ft
 from typing import Callable, Optional
+from utils.i18n import tr
 
 
 def _get(obj, key: str, default=None):
@@ -46,7 +47,7 @@ def build_protocol_library_view(
             protocols = data_provider.list_protocols()
         except Exception as e:
             protocols_list.controls.append(
-                ft.Text(f"加载失败：{e}", color=ft.Colors.RED_400)
+                ft.Text(f"{tr('加载失败')}：{e}", color=ft.Colors.RED_400)
             )
             page.update()
             return
@@ -77,9 +78,9 @@ def build_protocol_library_view(
         subtitle_parts = [f"v{version}"]
         if author:
             subtitle_parts.append(author)
-        subtitle_parts.append(f"{step_count} 步")
+        subtitle_parts.append(f"{step_count} {tr('步')}")
         if use_count:
-            subtitle_parts.append(f"已用 {use_count} 次")
+            subtitle_parts.append(f"{tr('已用')} {use_count} {tr('次')}")
 
         def _start_experiment(_):
             _show_name_dialog(p)
@@ -102,9 +103,9 @@ def build_protocol_library_view(
             _confirm_delete(pid, name)
 
         menu_items = [
-            ft.PopupMenuItem(content="编辑", on_click=_edit),
-            ft.PopupMenuItem(content="复制", on_click=_duplicate),
-            ft.PopupMenuItem(content="删除", on_click=_delete),
+            ft.PopupMenuItem(content=tr("编辑"), on_click=_edit),
+            ft.PopupMenuItem(content=tr("复制"), on_click=_duplicate),
+            ft.PopupMenuItem(content=tr("删除"), on_click=_delete),
         ]
 
         return ft.Container(
@@ -115,7 +116,7 @@ def build_protocol_library_view(
                             color=ft.Colors.GREY_500),
                 ], expand=True, spacing=2),
                 ft.ElevatedButton(
-                    "新建实验",
+                    tr("新建实验"),
                     on_click=_start_experiment,
                     bgcolor=ft.Colors.ORANGE_600,
                     color=ft.Colors.WHITE,
@@ -138,14 +139,14 @@ def build_protocol_library_view(
 
         tf = ft.TextField(
             value=default_name,
-            label="实验名称",
+            label=tr("实验名称"),
             autofocus=True,
         )
 
         def _create(_):
             name = tf.value.strip()
             if not name:
-                tf.error_text = "请输入实验名称"
+                tf.error_text = tr("请输入实验名称")
                 page.update()
                 return
             _close_overlay(page, dlg)
@@ -156,11 +157,11 @@ def build_protocol_library_view(
             })
 
         dlg = ft.AlertDialog(
-            title=ft.Text("新建实验"),
+            title=ft.Text(tr("新建实验")),
             content=tf,
             actions=[
-                ft.TextButton("取消", on_click=lambda _: _close_dlg(dlg)),
-                ft.ElevatedButton("开始", on_click=_create,
+                ft.TextButton(tr("取消"), on_click=lambda _: _close_dlg(dlg)),
+                ft.ElevatedButton(tr("开始"), on_click=_create,
                                    bgcolor=ft.Colors.ORANGE_600,
                                    color=ft.Colors.WHITE),
             ],
@@ -177,11 +178,11 @@ def build_protocol_library_view(
                 _show_snack(f"删除失败：{ex}", error=True)
 
         dlg = ft.AlertDialog(
-            title=ft.Text("确认删除"),
+            title=ft.Text(tr("确认删除")),
             content=ft.Text(f"删除协议「{name}」？此操作不可撤销。"),
             actions=[
-                ft.TextButton("取消", on_click=lambda _: _close_dlg(dlg)),
-                ft.ElevatedButton("删除", on_click=_do_delete,
+                ft.TextButton(tr("取消"), on_click=lambda _: _close_dlg(dlg)),
+                ft.ElevatedButton(tr("删除"), on_click=_do_delete,
                                    bgcolor=ft.Colors.RED_600,
                                    color=ft.Colors.WHITE),
             ],
@@ -193,9 +194,9 @@ def build_protocol_library_view(
             content=ft.Column([
                 ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=64,
                         color=ft.Colors.GREY_300),
-                ft.Text("暂无协议", size=16, color=ft.Colors.GREY_500,
+                ft.Text(tr("暂无协议"), size=16, color=ft.Colors.GREY_500,
                         text_align=ft.TextAlign.CENTER),
-                ft.Text("导入或新建一个协议模板开始使用",
+                ft.Text(tr("导入或新建一个协议模板开始使用"),
                         size=13, color=ft.Colors.GREY_400,
                         text_align=ft.TextAlign.CENTER),
             ],
@@ -213,17 +214,17 @@ def build_protocol_library_view(
 
     # ── Header ──────────────────────────────────
     header = ft.Row([
-        ft.Text("协议库", size=20, weight=ft.FontWeight.BOLD),
+        ft.Text(tr("协议库"), size=20, weight=ft.FontWeight.BOLD),
         ft.Container(expand=True),
         ft.IconButton(
             ft.Icons.UPLOAD_FILE,
-            tooltip="导入协议",
+            tooltip=tr("导入协议"),
             on_click=lambda _: on_import_protocol(),
             icon_color=ft.Colors.ORANGE_600,
         ),
         ft.IconButton(
             ft.Icons.REFRESH,
-            tooltip="刷新",
+            tooltip=tr("刷新"),
             on_click=lambda _: _load(),
             icon_color=ft.Colors.GREY_600,
         ),
