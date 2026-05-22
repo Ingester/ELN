@@ -157,6 +157,7 @@ class TimerManager:
                 state.status = "running"
                 if state.started_at is None:
                     state.started_at = _now()
+                self._log_event_locked(state, "start")
         self._persist(tid)
         return self._timers[tid].clone()
 
@@ -166,6 +167,7 @@ class TimerManager:
             state = self._timers.get(tid)
             if state and state.status == "running":
                 state.status = "paused"
+                self._log_event_locked(state, "pause")
         self._persist(tid)
         return self._timers.get(tid, None) and self._timers[tid].clone()
 
@@ -175,6 +177,7 @@ class TimerManager:
         with self._state_lock:
             state = self._timers.get(tid)
             if state:
+                self._log_event_locked(state, "reset")
                 state.remaining_seconds = state.total_seconds
                 state.overtime_seconds = 0
                 state.status = "idle"
@@ -192,6 +195,7 @@ class TimerManager:
             if state and state.status not in ("overtime", "confirmed"):
                 state.total_seconds = new_total
                 state.remaining_seconds = new_total
+                self._log_event_locked(state, "override")
         self._persist(tid)
         return self._timers.get(tid, None) and self._timers[tid].clone()
 
@@ -214,6 +218,8 @@ class TimerManager:
         remaining_seconds: int,
         status: str,
         overtime_seconds: int = 0,
+        action: str = "sync",
+        elapsed_seconds: Optional[int] = None,
     ) -> TimerState:
         """Replace local state from a client-side authoritative timer."""
         tid = f"{experiment_id}_{step_id}"
@@ -224,6 +230,10 @@ class TimerManager:
             normalized_status = "overtime"
             overtime = max(overtime, abs(int(remaining_seconds)))
         with self._state_lock:
+            previous = self._timers.get(tid)
+            should_log_action = bool(action and action not in ("sync", "tick"))
+            if should_log_action and previous is not None:
+                self._log_event_locked(previous, action, elapsed_seconds=elapsed_seconds)
             state = TimerState(
                 timer_id=tid,
                 experiment_id=experiment_id,
@@ -236,6 +246,8 @@ class TimerManager:
                 started_at=_now() if normalized_status == "running" else None,
             )
             self._timers[tid] = state
+            if should_log_action and previous is None:
+                self._log_event_locked(state, action, elapsed_seconds=elapsed_seconds)
         self._persist(tid)
         return state.clone()
 
@@ -246,6 +258,7 @@ class TimerManager:
             state = self._timers.get(tid)
             if state and state.status == "overtime":
                 state.status = "confirmed"
+                self._log_event_locked(state, "confirm")
         self._persist(tid)
         # Also persist overtime_seconds to steps table
         self._write_overtime_to_step(tid)
@@ -371,6 +384,30 @@ class TimerManager:
         except Exception as e:
             logger.warning(f"Step overtime write error: {e}")
 
+    def _log_event_locked(
+        self,
+        state: TimerState,
+        action: str,
+        elapsed_seconds: Optional[int] = None,
+        notes: str = "",
+    ) -> None:
+        """Append a timer operation while the caller already holds state lock."""
+        try:
+            import db.database as db_ops
+            elapsed = _elapsed_for_state(state) if elapsed_seconds is None else elapsed_seconds
+            db_ops.log_timer_event(
+                experiment_id=state.experiment_id,
+                step_id=state.step_id,
+                action=action,
+                total_seconds=state.total_seconds,
+                remaining_seconds=state.remaining_seconds,
+                overtime_seconds=state.overtime_seconds,
+                elapsed_seconds=elapsed,
+                notes=notes,
+            )
+        except Exception as e:
+            logger.warning(f"Timer event log error: {e}")
+
     def restore_from_db(self) -> None:
         """On app start, restore any timers that were running/overtime."""
         try:
@@ -433,6 +470,12 @@ def _elapsed_since(iso_str: str) -> int:
         return max(0, int((now - then).total_seconds()))
     except Exception:
         return 0
+
+
+def _elapsed_for_state(state: TimerState) -> int:
+    if state.status in ("overtime", "confirmed"):
+        return max(0, int(state.total_seconds or 0)) + max(0, int(state.overtime_seconds or 0))
+    return max(0, int(state.total_seconds or 0) - int(state.remaining_seconds or 0))
 
 
 # Module-level singleton accessor

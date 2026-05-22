@@ -16,6 +16,7 @@ def generate_report(
     steps: list[Step],
     storage_items: list[StorageItem],
     boxes: dict[int, Box],
+    timer_events: list[dict] | None = None,
 ) -> str:
     """Return a complete Markdown report string."""
     lines: list[str] = []
@@ -47,8 +48,15 @@ def generate_report(
     lines.append("## 步骤记录")
     lines.append("")
 
+    events_by_step: dict[int, list[dict]] = {}
+    for event in timer_events or []:
+        try:
+            events_by_step.setdefault(int(event.get("step_id")), []).append(event)
+        except Exception:
+            pass
+
     for step in steps:
-        lines.extend(_render_step(step))
+        lines.extend(_render_step(step, events_by_step.get(step.id, [])))
 
     # ── Storage table ────────────────────────────
     if storage_items:
@@ -93,7 +101,7 @@ def generate_report(
 # Step rendering
 # ─────────────────────────────────────────────
 
-def _render_step(step: Step) -> list[str]:
+def _render_step(step: Step, timer_events: list[dict] | None = None) -> list[str]:
     lines: list[str] = []
     status_icon = "✅" if step.completed_at else "⬜"
     lines.append(f"### {status_icon} Step {step.step_index + 1} · {step.title}")
@@ -152,6 +160,8 @@ def _render_step(step: Step) -> list[str]:
             lines.append(f"- 计划时长：{_fmt_seconds(planned)}")
             if step.timer_override_seconds is not None and step.timer_override_seconds != step.timer_seconds:
                 lines.append(f"  *(原始：{_fmt_seconds(step.timer_seconds)}，已修改)*")
+        if timer_events:
+            lines.extend(_render_timer_events(timer_events))
         lines.append("")
 
     # Photos
@@ -175,6 +185,54 @@ def _render_step(step: Step) -> list[str]:
         lines.append("")
 
     return lines
+
+
+def _render_timer_events(events: list[dict]) -> list[str]:
+    lines: list[str] = []
+    useful = [
+        e for e in sorted(events, key=lambda x: (str(x.get("created_at", "")), int(x.get("id", 0) or 0)))
+        if e.get("action") in {"start", "pause", "reset", "confirm", "override"}
+    ]
+    if not useful:
+        return lines
+
+    reset_events = [e for e in useful if e.get("action") == "reset"]
+    segments: list[int] = []
+    last_reset_idx = -1
+    for idx, event in enumerate(useful):
+        if event.get("action") == "reset":
+            segments.append(int(event.get("elapsed_seconds") or 0))
+            last_reset_idx = idx
+
+    tail_events = useful[last_reset_idx + 1:]
+    tail_elapsed = max((int(e.get("elapsed_seconds") or 0) for e in tail_events), default=0)
+    if tail_elapsed or not segments:
+        segments.append(tail_elapsed)
+
+    total_elapsed = sum(segments)
+    lines.append(f"- 实际累计计时：{_fmt_seconds(total_elapsed)}")
+    if reset_events:
+        lines.append(f"- Reset 次数：{len(reset_events)}")
+        for i, seconds in enumerate(segments, 1):
+            label = "当前段" if i == len(segments) and useful[-1].get("action") != "reset" else f"第 {i} 段"
+            lines.append(f"  - {label}：{_fmt_seconds(seconds)}")
+
+    lines.append("- 计时操作记录：")
+    for event in useful:
+        action = _timer_action_label(str(event.get("action", "")))
+        elapsed = _fmt_seconds(int(event.get("elapsed_seconds") or 0))
+        lines.append(f"  - {_fmt_dt(event.get('created_at'))} · {action} · 当段已计时 {elapsed}")
+    return lines
+
+
+def _timer_action_label(action: str) -> str:
+    return {
+        "start": "开始/继续",
+        "pause": "暂停",
+        "reset": "重置",
+        "confirm": "确认结束",
+        "override": "修改时长",
+    }.get(action, action)
 
 
 # ─────────────────────────────────────────────

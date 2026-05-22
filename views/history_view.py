@@ -37,6 +37,7 @@ def build_history_view(
     on_back: Callable[[], None],
     on_open_report: Callable[[int], None],
     on_reuse_protocol: Callable[[dict], None],
+    on_continue_experiment: Callable[[int], None],
     is_mobile: bool = True,
 ) -> ft.Control:
 
@@ -87,7 +88,7 @@ def build_history_view(
         completed_at = _get(exp, "completed_at", progress.get("completed_at", ""))
 
         status_color = ft.Colors.GREEN_600 if status == "completed" else ft.Colors.GREY_500
-        status_label = tr("已完成") if status == "completed" else tr("已归档")
+        status_label = tr("已完成") if status == "completed" else tr("已放弃")
         time_parts = [f"{tr('创建：')}{created or '—'}"]
         if completed_at:
             time_parts.append(f"{tr('结束：')}{_fmt_dt(completed_at)}")
@@ -111,6 +112,13 @@ def build_history_view(
                 ], expand=True, spacing=4),
                 ft.Row([
                     ft.IconButton(
+                        ft.Icons.PLAY_ARROW,
+                        tooltip=tr("继续实验"),
+                        visible=status == "archived",
+                        on_click=lambda _, eid=exp_id: _continue_experiment(eid),
+                        icon_color=ft.Colors.GREEN_600,
+                    ),
+                    ft.IconButton(
                         ft.Icons.SUMMARIZE_OUTLINED,
                         tooltip=tr("查看报告"),
                         on_click=lambda _, eid=exp_id: on_open_report(eid),
@@ -130,6 +138,19 @@ def build_history_view(
             margin=ft.Margin.only(bottom=8),
             bgcolor=ft.Colors.WHITE,
         )
+
+    def _continue_experiment(exp_id: int) -> None:
+        try:
+            data_provider.update_experiment(exp_id, status="active")
+            on_continue_experiment(exp_id)
+        except Exception as ex:
+            _open_overlay(
+                page,
+                ft.SnackBar(
+                    content=ft.Text(f"{tr('继续失败')}：{ex}"),
+                    bgcolor=ft.Colors.RED_400,
+                ),
+            )
 
     def _reuse_protocol(exp):
         """Create a new experiment from the same protocol."""

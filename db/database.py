@@ -145,6 +145,19 @@ CREATE TABLE IF NOT EXISTS timers (
     updated_at          TEXT    NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS timer_events (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id       INTEGER NOT NULL,
+    step_id             INTEGER NOT NULL,
+    action              TEXT    NOT NULL,
+    total_seconds       INTEGER NOT NULL DEFAULT 0,
+    remaining_seconds   INTEGER NOT NULL DEFAULT 0,
+    overtime_seconds    INTEGER NOT NULL DEFAULT 0,
+    elapsed_seconds     INTEGER NOT NULL DEFAULT 0,
+    created_at          TEXT    NOT NULL,
+    notes               TEXT    DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS protocols (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     name            TEXT    NOT NULL,
@@ -195,6 +208,7 @@ CREATE TABLE IF NOT EXISTS storage_items (
 
 CREATE INDEX IF NOT EXISTS idx_steps_experiment ON steps(experiment_id, step_index);
 CREATE INDEX IF NOT EXISTS idx_timers_experiment ON timers(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_timer_events_step ON timer_events(experiment_id, step_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_box_slots_box ON box_slots(box_id);
 CREATE INDEX IF NOT EXISTS idx_storage_experiment ON storage_items(experiment_id);
 """
@@ -493,6 +507,54 @@ def list_active_timers() -> list[TimerRecord]:
     return [TimerRecord.from_row(tuple(r)) for r in rows]
 
 
+def log_timer_event(
+    experiment_id: int,
+    step_id: int,
+    action: str,
+    total_seconds: int = 0,
+    remaining_seconds: int = 0,
+    overtime_seconds: int = 0,
+    elapsed_seconds: int = 0,
+    notes: str = "",
+) -> None:
+    """Append a human-meaningful timer action for report/audit history."""
+    action = (action or "").strip().lower()
+    if not action:
+        return
+    with db_conn() as conn:
+        conn.execute(
+            """INSERT INTO timer_events
+               (experiment_id, step_id, action, total_seconds, remaining_seconds,
+                overtime_seconds, elapsed_seconds, created_at, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                experiment_id,
+                step_id,
+                action,
+                max(0, int(total_seconds or 0)),
+                max(0, int(remaining_seconds or 0)),
+                max(0, int(overtime_seconds or 0)),
+                max(0, int(elapsed_seconds or 0)),
+                _now(),
+                notes or "",
+            ),
+        )
+
+
+def list_timer_events(experiment_id: int) -> list[dict[str, Any]]:
+    with db_conn() as conn:
+        rows = conn.execute(
+            """SELECT id, experiment_id, step_id, action, total_seconds,
+                      remaining_seconds, overtime_seconds, elapsed_seconds,
+                      created_at, notes
+               FROM timer_events
+               WHERE experiment_id = ?
+               ORDER BY step_id, created_at, id""",
+            (experiment_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ─────────────────────────────────────────────
 # Protocols CRUD
 # ─────────────────────────────────────────────
@@ -768,7 +830,8 @@ def get_report(exp_id: int) -> str:
     steps = get_steps(exp_id)
     storage_items = get_storage_items(exp_id)
     boxes = {b.id: b for b in list_boxes()}
-    return generate_report(exp, steps, storage_items, boxes)
+    timer_events = list_timer_events(exp_id)
+    return generate_report(exp, steps, storage_items, boxes, timer_events)
 
 
 def save_report(exp_id: int) -> dict[str, str]:

@@ -35,6 +35,18 @@ def _get(obj, key: str, default=None):
     return getattr(obj, key, default)
 
 
+def _open_overlay(page, ctrl):
+    if ctrl not in page.overlay:
+        page.overlay.append(ctrl)
+    ctrl.open = True
+    page.update()
+
+
+def _close_overlay(page, ctrl):
+    ctrl.open = False
+    page.update()
+
+
 def build_home_view(
     page: ft.Page,
     data_provider,                          # db.database or utils.api_client
@@ -127,6 +139,11 @@ def build_home_view(
             timer_line,
             ft.Row([
                 ft.Container(expand=True),
+                ft.TextButton(
+                    tr("放弃实验"),
+                    on_click=lambda _, e=exp: _confirm_abandon(e),
+                    style=ft.ButtonStyle(color=ft.Colors.RED_500),
+                ),
                 ft.ElevatedButton(
                     tr("继续 →"),
                     url=ft.Url(
@@ -153,6 +170,37 @@ def build_home_view(
                 offset=ft.Offset(0, 2),
             ),
         )
+
+    def _confirm_abandon(exp) -> None:
+        exp_id = int(_get(exp, "id"))
+        name = _get(exp, "name", "实验")
+
+        def _do_abandon(_):
+            _close_overlay(page, dlg)
+            try:
+                data_provider.update_experiment(exp_id, status="archived")
+                status_text.value = tr("实验已放入历史记录")
+                cards_column.controls = _load_experiments()
+                page.update()
+            except Exception as ex:
+                status_text.value = f"{tr('放弃失败')}：{ex}"
+                status_text.color = ft.Colors.RED_500
+                page.update()
+
+        dlg = ft.AlertDialog(
+            title=ft.Text(tr("放弃实验")),
+            content=ft.Text(f"{tr('确认放弃这个实验？')} {name}\n{tr('实验会进入历史记录，以后可以继续。')}"),
+            actions=[
+                ft.TextButton(tr("取消"), on_click=lambda _: _close_overlay(page, dlg)),
+                ft.ElevatedButton(
+                    tr("放弃"),
+                    on_click=_do_abandon,
+                    bgcolor=ft.Colors.RED_600,
+                    color=ft.Colors.WHITE,
+                ),
+            ],
+        )
+        _open_overlay(page, dlg)
 
     def _native_runner_url() -> str:
         configured = os.environ.get("ELN_API_PUBLIC_URL", "").rstrip("/")

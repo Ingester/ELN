@@ -92,6 +92,8 @@ class TimerSync(BaseModel):
     remaining_seconds: int
     overtime_seconds: int = 0
     status: str
+    action: str = "sync"
+    elapsed_seconds: Optional[int] = None
 
 
 class ProtocolCreate(BaseModel):
@@ -640,7 +642,7 @@ function saveTimerOverride(expId, stepId, minutes){
   if(Number.isNaN(value) || value < 0){ status(stepId, "计时器请输入有效分钟数"); return; }
   const seconds = Math.max(0, Math.round(value * 60));
   localStorage.setItem(timerKey(stepId), String(seconds));
-  resetLocalTimer(expId, stepId, seconds);
+  resetLocalTimer(expId, stepId, seconds, "override");
   enqueue({type:"patchStep", stepId, payload: patchPayload(stepId)});
   status(stepId, "计时器已存本地，等待同步");
   syncNow();
@@ -707,7 +709,9 @@ async function tellComputerTimerState(expId, stepId, state, patchStep=false){
       total_seconds: state.total,
       remaining_seconds: Math.max(0, Math.floor(state.remaining ?? state.pausedRemaining ?? state.total)),
       overtime_seconds: state.remaining < 0 ? Math.abs(Math.floor(state.remaining)) : 0,
-      status: state.status
+      status: state.status,
+      action: state.action || "sync",
+      elapsed_seconds: Math.max(0, Math.floor(state.elapsedSeconds ?? elapsedForState(state)))
     };
     const res = await fetch(`/api/timers/${expId}/${stepId}/sync`, {
       method:"POST",
@@ -734,7 +738,10 @@ function startLocalTimer(expId, stepId, total){
   const remaining = current.status === "paused" ? current.remaining : total;
   timers[stepId] = {status:"running", total, pausedRemaining:remaining, remaining, startedAt:Date.now()};
   setTimers(timers);
-  queueComputerTimerState(expId, stepId, timerState(stepId, total), true);
+  const next = timerState(stepId, total);
+  next.action = "start";
+  next.elapsedSeconds = elapsedForState(current);
+  queueComputerTimerState(expId, stepId, next, true);
   refreshTimers();
 }
 
@@ -744,16 +751,31 @@ function pauseLocalTimer(expId, stepId){
   const remaining = Math.max(0, current.remaining);
   timers[stepId] = {status:"paused", total:current.total, pausedRemaining:remaining, remaining, startedAt:null};
   setTimers(timers);
-  queueComputerTimerState(expId, stepId, timerState(stepId, current.total));
+  const next = timerState(stepId, current.total);
+  next.action = "pause";
+  next.elapsedSeconds = elapsedForState(current);
+  queueComputerTimerState(expId, stepId, next);
   refreshTimers();
 }
 
-function resetLocalTimer(expId, stepId, total){
+function resetLocalTimer(expId, stepId, total, action="reset"){
   const timers = getTimers();
+  const current = timerState(stepId, timers[stepId]?.total || total);
   timers[stepId] = {status:"idle", total, pausedRemaining:total, remaining:total, startedAt:null};
   setTimers(timers);
-  queueComputerTimerState(expId, stepId, timerState(stepId, total), true);
+  const next = timerState(stepId, total);
+  next.action = action;
+  next.elapsedSeconds = elapsedForState(current);
+  queueComputerTimerState(expId, stepId, next, true);
   refreshTimers();
+}
+
+function elapsedForState(state){
+  if(!state) return 0;
+  const total = Math.max(0, Math.floor(state.total || 0));
+  const remaining = Math.floor(state.remaining ?? state.pausedRemaining ?? total);
+  if(remaining < 0) return total + Math.abs(remaining);
+  return Math.max(0, total - Math.max(0, remaining));
 }
 
 function refreshTimers(){
@@ -1121,6 +1143,8 @@ def sync_managed_timer(exp_id: int, step_id: int, body: TimerSync):
         remaining_seconds=body.remaining_seconds,
         overtime_seconds=body.overtime_seconds,
         status=body.status,
+        action=body.action,
+        elapsed_seconds=body.elapsed_seconds,
     )
     return _timer_state_to_dict(state)
 
@@ -2095,7 +2119,7 @@ def get_report(exp_id: int):
     steps = db_ops.get_steps(exp_id)
     storage_items = db_ops.get_storage_items(exp_id)
     boxes = {b.id: b for b in db_ops.list_boxes()}
-    md = generate_report(exp, steps, storage_items, boxes)
+    md = generate_report(exp, steps, storage_items, boxes, db_ops.list_timer_events(exp_id))
     return {"experiment_id": exp_id, "markdown": md}
 
 

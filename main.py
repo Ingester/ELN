@@ -210,6 +210,7 @@ def main(page: ft.Page) -> None:
                 on_back=lambda: _navigate(ROUTE_HOME),
                 on_open_report=lambda eid: _navigate(ROUTE_REPORT, {"experiment_id": eid}),
                 on_reuse_protocol=_create_experiment_and_navigate,
+                on_continue_experiment=_open_existing_experiment,
                 is_mobile=IS_MOBILE,
             )
 
@@ -317,6 +318,15 @@ def main(page: ft.Page) -> None:
             )
         except Exception as e:
             _open_overlay(page, ft.SnackBar(                content=ft.Text(f"创建实验失败：{e}"),                bgcolor=ft.Colors.RED_400,            ))
+
+    def _open_existing_experiment(exp_id: int) -> None:
+        page.launch_url(
+            ft.Url(
+                f"{_native_runner_url()}/run?experiment_id={int(exp_id)}",
+                target=ft.UrlTarget.SELF,
+            ),
+            web_popup_window_name=ft.UrlTarget.SELF,
+        )
 
     def _parse_protocol(json_str: str):
         from db.models import ProtocolDefinition
