@@ -29,6 +29,7 @@ def build_settings_view(
     page: ft.Page,
     is_mobile: bool = True,
     on_server_url_changed: Optional[Callable[[str], None]] = None,
+    on_language_changed: Optional[Callable[[], None]] = None,
 ) -> ft.Control:
 
     import utils.api_client as api_client
@@ -94,6 +95,8 @@ def build_settings_view(
 
     def _change_language(e):
         set_language(e.control.value or "zh")
+        if on_language_changed:
+            on_language_changed()
         _open_overlay(
             page,
             ft.SnackBar(content=ft.Text(_("已切换语言，请刷新或切换页面查看效果"))),

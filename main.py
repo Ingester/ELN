@@ -134,6 +134,7 @@ def main(page: ft.Page) -> None:
     # ── Navigation state ─────────────────────────
     _current_tab: list[str] = [ROUTE_HOME]
     _nav_params: list[dict] = [{}]
+    _refresh_nav_language: list = [lambda: None]
 
     content_area = ft.Container(expand=True)
 
@@ -186,6 +187,7 @@ def main(page: ft.Page) -> None:
                 page=page,
                 is_mobile=IS_MOBILE,
                 on_server_url_changed=lambda url: None,
+                on_language_changed=lambda: _refresh_language_shell(),
             )
 
         elif route == ROUTE_STEPPER:
@@ -291,6 +293,12 @@ def main(page: ft.Page) -> None:
             except Exception as fallback_ex:
                 _debug_log(f"route_error update failed route={route}: {type(fallback_ex).__name__}: {fallback_ex}")
 
+    def _refresh_language_shell() -> None:
+        """Rebuild shell labels when the interface language changes."""
+        _refresh_nav_language[0]()
+        _render_route(_current_tab[0], _nav_params[0])
+        _update_nav_selection(_current_tab[0])
+
     def _create_experiment_and_navigate(exp_params: dict) -> None:
         """Create experiment from protocol dict and open the native runner."""
         try:
@@ -341,11 +349,22 @@ def main(page: ft.Page) -> None:
                     pass
 
         page.navigation_bar = nav
+
+        def _refresh_mobile_nav_language() -> None:
+            old_idx = getattr(_nav_ref[0], "selected_index", 0)
+            new_nav = _build_mobile_nav(_navigate, _TAB_ROUTES)
+            new_nav.selected_index = old_idx
+            _nav_ref[0] = new_nav
+            page.navigation_bar = new_nav
+            page.update()
+
+        _refresh_nav_language[0] = _refresh_mobile_nav_language
         page.on_resize = lambda _: page.update()
 
     else:
         rail = _build_desktop_rail(_navigate, _TAB_ROUTES)
         _nav_ref: list = [rail]
+        _layout_row_ref: list = [None]
         _DESKTOP_ROUTES = [
             ROUTE_HOME, ROUTE_PROTOCOLS, ROUTE_BOX, ROUTE_HISTORY, ROUTE_SETTINGS
         ]
@@ -359,17 +378,28 @@ def main(page: ft.Page) -> None:
                 except Exception:
                     pass
 
+        def _refresh_desktop_nav_language() -> None:
+            old_idx = getattr(_nav_ref[0], "selected_index", 0)
+            new_rail = _build_desktop_rail(_navigate, _TAB_ROUTES)
+            new_rail.selected_index = old_idx
+            _nav_ref[0] = new_rail
+            if _layout_row_ref[0] is not None:
+                _layout_row_ref[0].controls[0] = new_rail
+            page.update()
+
+        _refresh_nav_language[0] = _refresh_desktop_nav_language
+
     # ── Page layout ──────────────────────────────
     if IS_MOBILE:
         page.add(content_area)
     else:
-        page.add(
-            ft.Row([
-                rail,
-                ft.VerticalDivider(width=1, color=ft.Colors.GREY_200),
-                content_area,
-            ], expand=True, spacing=0)
-        )
+        layout_row = ft.Row([
+            rail,
+            ft.VerticalDivider(width=1, color=ft.Colors.GREY_200),
+            content_area,
+        ], expand=True, spacing=0)
+        _layout_row_ref[0] = layout_row
+        page.add(layout_row)
 
     def _on_route_change(_) -> None:
         route, params = _get_initial_route(page)
