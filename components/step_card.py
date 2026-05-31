@@ -1,7 +1,7 @@
 """
 ELN App — StepCard
 Full-screen card for a single experiment step.
-Contains: title, description (with inline editable numbers),
+Contains: title, Markdown description,
           timer widget, field editor, camera widget, complete button.
 """
 
@@ -14,7 +14,6 @@ from typing import Callable, Optional
 
 from db.models import Step
 from components.timer_widget import TimerWidget
-from components.editable_text import EditableText
 from components.field_editor import FieldEditor
 from components.camera_widget import CameraWidget
 
@@ -134,12 +133,12 @@ class StepCard(ft.Container):
             ),
         )
 
-        # ── Description with inline editing ─────
-        self._editable_desc = EditableText(
-            description=step.description,
-            overrides=self._overrides,
-            on_change=self._on_overrides_change,
-            is_mobile=self.is_mobile,
+        # ── Description with Markdown rendering ─
+        self._editable_desc = ft.Markdown(
+            value=step.description or "",
+            selectable=True,
+            extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
+            code_theme="atom-one-light",
         )
         desc_section = ft.Container(
             content=self._editable_desc,

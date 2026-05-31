@@ -54,7 +54,7 @@ Protocol JSON 是 ELN App 的实验模板。它定义一个实验包含哪些步
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `title` | string | 是 | 步骤标题 |
-| `description` | string | 是 | 步骤说明。说明里的数字会显示为可点击修改的橙色数字 |
+| `description` | string | 是 | 步骤说明。支持 Markdown，包括标题、列表、表格、加粗、行内代码和代码块 |
 | `timer_seconds` | number 或 null | 否 | 计时秒数。`0` 或 `null` 表示无计时器 |
 | `has_camera` | boolean | 否 | 是否显示照片上传 / 拍照区域 |
 | `camera_required` | boolean | 否 | 照片是否原则上必需。目前不会强制阻止实验推进，可后续补照片 |
@@ -74,9 +74,9 @@ Protocol JSON 是 ELN App 的实验模板。它定义一个实验包含哪些步
 
 ---
 
-## 4. 多行步骤说明
+## 4. 多行步骤说明与 Markdown
 
-`description` 支持多行，但 JSON 字符串里换行必须写成 `\n`。
+`description` 支持多行和 Markdown，但 JSON 字符串里换行必须写成 `\n`。
 
 正确：
 
@@ -95,22 +95,25 @@ Protocol JSON 是 ELN App 的实验模板。它定义一个实验包含哪些步
 
 ---
 
-## 5. 可点击修改的数字
+### Markdown 表格示例
 
-`description` 里的常见数字和单位会在实验执行页中显示成橙色可点击内容，例如：
+```json
+"description": "### 反应体系\n| 组分 | 体积 |\n|---|---:|\n| 2x Mix | 10 µL |\n| 模板 | 1 µL |\n\n- 冰上操作\n- 轻轻混匀"
+```
 
-- `20 µL`
-- `100V`
-- `30 分钟`
-- `37°C`
-- `5000×g`
-- `1 mM`
+常用支持格式：
 
-点击后修改只会影响当前实验，不会修改协议库模板。
+- 标题：`#`、`##`、`###`
+- 无序列表和有序列表
+- Markdown 表格
+- 加粗、斜体、行内代码
+- 三反引号代码块
+
+如果想修改整段说明，进入实验执行页后点击“编辑整段说明”。
 
 ---
 
-## 6. 记录字段 `fields`
+## 5. 记录字段 `fields`
 
 每个 field 是一个 object。
 
@@ -179,7 +182,7 @@ Protocol JSON 是 ELN App 的实验模板。它定义一个实验包含哪些步
 
 ---
 
-## 7. 储存物品 `storage_items`
+## 6. 储存物品 `storage_items`
 
 如果实验开始前已经知道最后要储存哪些东西，可以在顶层写 `storage_items`。
 
@@ -211,7 +214,7 @@ Protocol JSON 是 ELN App 的实验模板。它定义一个实验包含哪些步
 
 ---
 
-## 8. 实验结束后临时添加储存物品
+## 7. 实验结束后临时添加储存物品
 
 更符合真实实验的方式是：实验做到最后，在“实验收尾 / 储存物品登记”页面临时添加本次实际产生的样品。
 
@@ -238,17 +241,17 @@ PCR 产物
 
 ---
 
-## 9. 给 AI 的生成提示词
+## 8. 给 AI 的生成提示词
 
 ```text
 请把下面实验流程整理成 ELN App protocol JSON。
 
 要求：
-1. 必须输出合法 JSON，不要 Markdown，不要解释。
+1. 必须输出合法 JSON，不要解释；description 字段内部可以使用 Markdown 文本。
 2. 顶层包含 protocol_name、version、author、storage_items、steps。
 3. 每个 step 包含 title、description、timer_seconds、has_camera、camera_required、fields。
 4. timer_seconds 必须是秒数；无计时器写 0。
-5. description 如果有多段，请用 \n 表示换行。
+5. description 如果有多段、列表或表格，请用 \n 表示换行。
 6. fields 的 type 只能是 text、number、dropdown。
 7. 每个 field 包含 key、label、type、default、required、options。
 8. 如果实验开始前不能确定要储存什么，storage_items 写 []。
@@ -256,22 +259,22 @@ PCR 产物
 
 ---
 
-## 10. 常见错误
+## 9. 常见错误
 
 - 不要在 JSON 里写注释
 - 字符串必须使用双引号
 - `true` / `false` 必须小写
 - `timer_seconds` 写秒数，不写分钟数
-- `description` 多行要用 `\n`
+- `description` 多行、列表和 Markdown 表格换行要用 `\n`
 - `dropdown` 必须有 `options`
 - `field.key` 同一步内不能重复
 - `default_box` 不会自动创建 Box
-- `description` 里的数字修改只影响当前实验
+- 已创建实验里的 `description` 可单独修改，不会影响协议库模板
 - 协议库模板修改不会影响已经创建的实验
 
 ---
 
-## 11. 完整示例
+## 10. 完整示例
 
 ```json
 {

@@ -176,7 +176,19 @@ def experiment_runner(experiment_id: Optional[int] = Query(None)):
     .progress { flex:1; height:6px; border-radius:999px; background:#e7e7e7; overflow:hidden; }
     .progress > div { height:100%; background:var(--orange); transition:width .2s ease; }
     .step-title { font-size:18px; font-weight:700; margin:4px 0 8px; }
-    .desc { line-height:1.55; color:#333; white-space:pre-wrap; }
+    .desc { line-height:1.55; color:#333; }
+    .desc p { margin:0 0 10px; }
+    .desc h1, .desc h2, .desc h3 { margin:14px 0 8px; line-height:1.25; }
+    .desc h1 { font-size:22px; }
+    .desc h2 { font-size:19px; }
+    .desc h3 { font-size:16px; }
+    .desc ul, .desc ol { margin:8px 0 10px 24px; padding:0; }
+    .desc table { border-collapse:collapse; width:100%; margin:10px 0; font-size:14px; }
+    .desc th, .desc td { border:1px solid var(--line); padding:7px 9px; vertical-align:top; }
+    .desc th { background:#fafafa; font-weight:700; }
+    .desc code { background:#f3f3f3; border-radius:4px; padding:1px 4px; }
+    .desc pre { background:#f6f6f6; border:1px solid var(--line); border-radius:8px; padding:10px; overflow:auto; }
+    .desc blockquote { border-left:4px solid #ddd; margin:8px 0; padding:3px 12px; color:#555; }
     .field { margin-top:12px; }
     .field label { display:block; color:#555; font-size:13px; margin-bottom:5px; }
     .field input, .field select, .field textarea { width:100%; border:1px solid #ddd; border-radius:8px; padding:11px; background:#fff; }
@@ -634,7 +646,126 @@ function saveDraft(stepId){ localStorage.setItem(draftKey(stepId), JSON.stringif
 function status(stepId, text){ const el=document.getElementById("status-"+stepId); if(el) el.textContent=text; }
 
 function renderDescription(step){
-  return esc(step.description || "");
+  return markdownToHtml(step.description || "");
+}
+
+function markdownToHtml(markdown){
+  const lines = String(markdown || "").replace(/\\r\\n/g, "\\n").split("\\n");
+  const out = [];
+  let i = 0;
+  let inCode = false;
+  let codeLines = [];
+  let paragraph = [];
+
+  function flushParagraph(){
+    if(paragraph.length){
+      out.push(`<p>${renderInline(paragraph.join(" "))}</p>`);
+      paragraph = [];
+    }
+  }
+  function flushCode(){
+    out.push(`<pre><code>${esc(codeLines.join("\\n"))}</code></pre>`);
+    codeLines = [];
+  }
+  function isTableSep(line){
+    return /^\\s*\\|?\\s*:?-{3,}:?\\s*(\\|\\s*:?-{3,}:?\\s*)+\\|?\\s*$/.test(line);
+  }
+  function splitTableRow(line){
+    let trimmed = line.trim();
+    if(trimmed.startsWith("|")) trimmed = trimmed.slice(1);
+    if(trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
+    return trimmed.split("|").map(cell => cell.trim());
+  }
+
+  while(i < lines.length){
+    const raw = lines[i];
+    const line = raw.trimEnd();
+    if(line.trim().startsWith("```")){
+      if(inCode){ flushCode(); inCode = false; } else { flushParagraph(); inCode = true; codeLines = []; }
+      i++;
+      continue;
+    }
+    if(inCode){ codeLines.push(raw); i++; continue; }
+
+    if(!line.trim()){ flushParagraph(); i++; continue; }
+
+    if(i + 1 < lines.length && line.includes("|") && isTableSep(lines[i + 1])){
+      flushParagraph();
+      const headers = splitTableRow(line);
+      i += 2;
+      const rows = [];
+      while(i < lines.length && lines[i].trim() && lines[i].includes("|")){
+        rows.push(splitTableRow(lines[i]));
+        i++;
+      }
+      out.push(`<table><thead><tr>${headers.map(h => `<th>${renderInline(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr>${headers.map((_, idx) => `<td>${renderInline(row[idx] || "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`);
+      continue;
+    }
+
+    const heading = /^(#{1,3})\\s+(.+)$/.exec(line);
+    if(heading){
+      flushParagraph();
+      const level = heading[1].length;
+      out.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+      i++;
+      continue;
+    }
+
+    if(/^>\\s+/.test(line)){
+      flushParagraph();
+      const quote = [];
+      while(i < lines.length && /^>\\s+/.test(lines[i])){
+        quote.push(lines[i].replace(/^>\\s+/, ""));
+        i++;
+      }
+      out.push(`<blockquote>${quote.map(q => `<p>${renderInline(q)}</p>`).join("")}</blockquote>`);
+      continue;
+    }
+
+    if(/^[-*+]\\s+/.test(line)){
+      flushParagraph();
+      const items = [];
+      while(i < lines.length && /^[-*+]\\s+/.test(lines[i].trimEnd())){
+        items.push(lines[i].trimEnd().replace(/^[-*+]\\s+/, ""));
+        i++;
+      }
+      out.push(`<ul>${items.map(item => `<li>${renderInline(item)}</li>`).join("")}</ul>`);
+      continue;
+    }
+
+    if(/^\\d+[.)]\\s+/.test(line)){
+      flushParagraph();
+      const items = [];
+      while(i < lines.length && /^\\d+[.)]\\s+/.test(lines[i].trimEnd())){
+        items.push(lines[i].trimEnd().replace(/^\\d+[.)]\\s+/, ""));
+        i++;
+      }
+      out.push(`<ol>${items.map(item => `<li>${renderInline(item)}</li>`).join("")}</ol>`);
+      continue;
+    }
+
+    paragraph.push(line.trim());
+    i++;
+  }
+  if(inCode) flushCode();
+  flushParagraph();
+  return out.join("");
+}
+
+function renderInline(text){
+  let html = esc(text);
+  const codes = [];
+  html = html.replace(/`([^`]+)`/g, (_, code) => {
+    codes.push(`<code>${code}</code>`);
+    return `\\u0000${codes.length - 1}\\u0000`;
+  });
+  html = html.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  html = html.replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>");
+  html = html.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  html = html.replace(/(^|[^*])\\*([^*]+)\\*(?!\\*)/g, "$1<em>$2</em>");
+  html = html.replace(/(^|[^_])_([^_]+)_(?!_)/g, "$1<em>$2</em>");
+  html = html.replace(/\\u0000(\\d+)\\u0000/g, (_, idx) => codes[Number(idx)] || "");
+  return html;
 }
 
 function saveTimerOverride(expId, stepId, minutes){

@@ -111,7 +111,9 @@ def _render_step(step: Step, timer_events: list[dict] | None = None) -> list[str
     overrides = step.get_description_overrides()
     if overrides:
         rendered_desc = render_plain(step.description, overrides)
-        lines.append(f"**描述**：{rendered_desc}")
+        lines.append("**描述**：")
+        lines.append("")
+        lines.append(rendered_desc)
         lines.append("")
         lines.append("**参数修改**（相对原始协议）：")
         lines.append("")
@@ -119,7 +121,9 @@ def _render_step(step: Step, timer_events: list[dict] | None = None) -> list[str
             lines.append(f"- `{key}` → `{new_val}` ⚠️ 已修改")
         lines.append("")
     else:
-        lines.append(f"**描述**：{step.description}")
+        lines.append("**描述**：")
+        lines.append("")
+        lines.append(step.description)
         lines.append("")
 
     # Field values
