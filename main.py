@@ -309,6 +309,21 @@ def main(page: ft.Page) -> None:
                 protocol_id=exp_params.get("protocol_id"),
             )
             exp_id = result.id if hasattr(result, "id") else result["id"]
+            if IS_MOBILE:
+                page.launch_url(
+                    ft.Url(
+                        f"{_native_runner_url()}/run?experiment_id={int(exp_id)}",
+                        target=ft.UrlTarget.SELF,
+                    ),
+                    web_popup_window_name=ft.UrlTarget.SELF,
+                )
+            else:
+                _navigate(ROUTE_STEPPER, {"experiment_id": int(exp_id)})
+        except Exception as e:
+            _open_overlay(page, ft.SnackBar(                content=ft.Text(f"创建实验失败：{e}"),                bgcolor=ft.Colors.RED_400,            ))
+
+    def _open_existing_experiment(exp_id: int) -> None:
+        if IS_MOBILE:
             page.launch_url(
                 ft.Url(
                     f"{_native_runner_url()}/run?experiment_id={int(exp_id)}",
@@ -316,17 +331,8 @@ def main(page: ft.Page) -> None:
                 ),
                 web_popup_window_name=ft.UrlTarget.SELF,
             )
-        except Exception as e:
-            _open_overlay(page, ft.SnackBar(                content=ft.Text(f"创建实验失败：{e}"),                bgcolor=ft.Colors.RED_400,            ))
-
-    def _open_existing_experiment(exp_id: int) -> None:
-        page.launch_url(
-            ft.Url(
-                f"{_native_runner_url()}/run?experiment_id={int(exp_id)}",
-                target=ft.UrlTarget.SELF,
-            ),
-            web_popup_window_name=ft.UrlTarget.SELF,
-        )
+        else:
+            _navigate(ROUTE_STEPPER, {"experiment_id": int(exp_id)})
 
     def _parse_protocol(json_str: str):
         from db.models import ProtocolDefinition
