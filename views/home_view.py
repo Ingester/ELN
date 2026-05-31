@@ -146,7 +146,10 @@ def build_home_view(
                 ),
                 ft.ElevatedButton(
                     tr("继续 →"),
-                    on_click=lambda _, eid=int(exp_id): _open_experiment(eid),
+                    url=ft.Url(
+                        f"{_native_runner_url()}/run?experiment_id={int(exp_id)}",
+                        target=ft.UrlTarget.SELF,
+                    ),
                     bgcolor=ft.Colors.ORANGE_600,
                     color=ft.Colors.WHITE,
                     height=32,
@@ -167,18 +170,6 @@ def build_home_view(
                 offset=ft.Offset(0, 2),
             ),
         )
-
-    def _open_experiment(exp_id: int) -> None:
-        if _navigating[0]:
-            return
-        _navigating[0] = True
-        try:
-            on_open_experiment(exp_id)
-        except Exception as ex:
-            _navigating[0] = False
-            status_text.value = f"{tr('继续失败')}：{ex}"
-            status_text.color = ft.Colors.RED_500
-            page.update()
 
     def _confirm_abandon(exp) -> None:
         exp_id = int(_get(exp, "id"))
