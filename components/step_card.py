@@ -16,6 +16,7 @@ from db.models import Step
 from components.timer_widget import TimerWidget
 from components.field_editor import FieldEditor
 from components.camera_widget import CameraWidget
+from components.web_text_controls import WebKeyboardInput
 
 def _open_overlay(page, ctrl):
     """Open a dialog/snackbar compatible with flet 0.70+."""
@@ -33,6 +34,7 @@ def _close_overlay(page, ctrl):
 
 # Desktop complete button width
 _DOUBLE_WIDTH = 240
+_STEP_NOTES_KEY = "__eln_step_notes"
 
 
 class StepCard(ft.Container):
@@ -86,7 +88,7 @@ class StepCard(ft.Container):
 
     def did_mount(self) -> None:
         self._mounted = True
-        if hasattr(self, "_field_editor"):
+        if hasattr(self, "_field_editor") or hasattr(self, "_notes_control"):
             try:
                 self.page.run_task(self._autosave_loop)
             except Exception:
@@ -104,9 +106,16 @@ class StepCard(ft.Container):
                 pass
 
     def _autosave_fields_once(self) -> None:
-        if self.data_provider is None or not hasattr(self, "_field_editor"):
+        if self.data_provider is None:
             return
-        values = self._json_safe_dict(self._field_editor.get_values())
+        if hasattr(self, "_field_editor"):
+            values = self._json_safe_dict(self._field_editor.get_values())
+        else:
+            values = self._json_safe_dict(self._values)
+        notes = self._values.get(_STEP_NOTES_KEY, "")
+        if hasattr(self, "_notes_control"):
+            notes = getattr(self._notes_control, "value", notes) or ""
+        values[_STEP_NOTES_KEY] = notes
         if values == self._last_saved_values:
             return
         self._values = values
@@ -200,6 +209,41 @@ class StepCard(ft.Container):
                 padding=12,
                 margin=ft.Margin.symmetric(vertical=4),
             )
+
+        # ── Free notes ───────────────────────────
+        self._notes_status = ft.Text("", size=12, color=ft.Colors.GREY_600)
+        notes_value = self._values.get(_STEP_NOTES_KEY, "")
+        if os.environ.get("ELN_WEB_MODE") == "1":
+            self._notes_control = WebKeyboardInput(
+                value=notes_value,
+                on_change=lambda value: self._capture_notes(value),
+                on_submit=lambda value: self._save_notes(value),
+                placeholder="点击后记录本步骤备注",
+                multiline=True,
+            )
+        else:
+            self._notes_control = ft.TextField(
+                value=notes_value,
+                hint_text="记录本步骤的临时观察、异常、样品情况等",
+                multiline=True,
+                min_lines=2,
+                max_lines=5,
+                border_color=ft.Colors.ORANGE_200,
+                focused_border_color=ft.Colors.ORANGE_600,
+                on_blur=lambda e: self._save_notes(e.control.value),
+            )
+        notes_section = ft.Container(
+            content=ft.Column([
+                ft.Text("备注", size=14, weight=ft.FontWeight.W_500,
+                        color=ft.Colors.GREY_700),
+                self._notes_control,
+                self._notes_status,
+            ], spacing=6),
+            border=ft.Border.all(1, ft.Colors.GREY_200),
+            border_radius=8,
+            padding=12,
+            margin=ft.Margin.symmetric(vertical=4),
+        )
 
         # ── Camera ───────────────────────────────
         camera_section = ft.Container()
@@ -306,6 +350,7 @@ class StepCard(ft.Container):
             desc_section,
             timer_section,
             field_section,
+            notes_section,
             camera_section,
             storage_section,
             completed_banner,
@@ -441,6 +486,7 @@ class StepCard(ft.Container):
         def _save(_):
             try:
                 fields_json, values = _parse()
+                values[_STEP_NOTES_KEY] = self._values.get(_STEP_NOTES_KEY, "")
                 self.data_provider.update_step(
                     self.step.id,
                     fields_json=json.dumps(fields_json, ensure_ascii=False),
@@ -461,7 +507,7 @@ class StepCard(ft.Container):
             content=ft.Column([
                 ft.Text(
                     "一行一个字段：key | label | type | required | options逗号分隔 | 当前值。"
-                    "新增备注可写：notes | 备注 | text | false | | 这里写备注",
+                    "步骤备注已经是固定区域，不需要在这里新增备注字段。",
                     size=12, color=ft.Colors.GREY_600,
                 ),
                 tf,
@@ -482,11 +528,26 @@ class StepCard(ft.Container):
             self._action_status.color = ft.Colors.GREEN_700
 
     def _on_values_change(self, new_values: dict) -> None:
+        notes = self._values.get(_STEP_NOTES_KEY, "")
         self._values = self._json_safe_dict(new_values)
+        self._values[_STEP_NOTES_KEY] = notes
         self._save_step()
         if hasattr(self, "_draft_status"):
             self._draft_status.value = "记录值已自动保存"
             self._draft_status.color = ft.Colors.GREEN_700
+
+    def _capture_notes(self, value: str) -> None:
+        self._values[_STEP_NOTES_KEY] = value or ""
+
+    def _save_notes(self, value: str) -> None:
+        self._capture_notes(value)
+        if self._save_step(silent=True) and hasattr(self, "_notes_status"):
+            self._notes_status.value = "备注已保存"
+            self._notes_status.color = ft.Colors.GREEN_700
+            try:
+                self.update()
+            except Exception:
+                pass
 
     def _on_photo_added(self, rel_path: str) -> None:
         self._photo_pending = False
@@ -589,8 +650,14 @@ class StepCard(ft.Container):
         return self._save_step()
 
     def _sync_field_values(self) -> None:
+        notes = self._values.get(_STEP_NOTES_KEY, "")
         if hasattr(self, "_field_editor"):
             self._values = self._json_safe_dict(self._field_editor.get_values())
+        else:
+            self._values = self._json_safe_dict(self._values)
+        if hasattr(self, "_notes_control"):
+            notes = getattr(self._notes_control, "value", notes) or ""
+        self._values[_STEP_NOTES_KEY] = notes
 
     def _on_save_draft_click(self, _) -> None:
         if not self.persist_draft():

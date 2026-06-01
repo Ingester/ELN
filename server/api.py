@@ -193,6 +193,7 @@ def experiment_runner(experiment_id: Optional[int] = Query(None)):
     .field label { display:block; color:#555; font-size:13px; margin-bottom:5px; }
     .field input, .field select, .field textarea { width:100%; border:1px solid #ddd; border-radius:8px; padding:11px; background:#fff; }
     .field textarea { min-height:180px; resize:vertical; }
+    .notes textarea { min-height:92px; }
     .actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px; }
     .done { color:var(--green); font-weight:700; }
     .warn { color:#d98200; }
@@ -263,6 +264,7 @@ const LS = {
 let selectedExperiment = new URLSearchParams(window.location.search).get("experiment_id") || localStorage.getItem(LS.selected) || "";
 let steps = [];
 let experiments = [];
+const STEP_NOTES_KEY = "__eln_step_notes";
 const timerSync = {};
 const timerLastSync = {};
 let modalSaveHandler = null;
@@ -499,6 +501,12 @@ function renderSteps(items){
     }
     return `<div class="field"><label>${esc(f.label)}${f.required ? " *" : ""}</label><input data-step="${step.id}" data-key="${esc(f.key)}" value="${esc(v)}" oninput="saveDraft(${step.id})" /></div>`;
   }).join("");
+  const notesValue = vals[STEP_NOTES_KEY] || "";
+  const notesBlock = `
+    <div class="field notes">
+      <label>备注</label>
+      <textarea data-step="${step.id}" data-key="${STEP_NOTES_KEY}" oninput="saveDraft(${step.id})" placeholder="记录本步骤的观察、异常、样品情况或临时想法">${esc(notesValue)}</textarea>
+    </div>`;
   const photos = (step.photo_paths || []).map((p,i) => `<a href="/photos/${esc(p)}" target="_blank">照片${i+1}</a>`).join("");
   const timerBlock = totalSeconds > 0 ? `
     <div class="timer" id="timer-box-${step.id}">
@@ -566,6 +574,7 @@ function renderSteps(items){
       <button class="edit-link" onclick="editFields(${step.id})">编辑字段</button>
     </div>
     ${fields}
+    ${notesBlock}
     ${photoBlock}
     ${wrapupBlock}
     <div class="actions">
@@ -590,6 +599,12 @@ function renderSteps(items){
       }
       return `<div class="field"><label>${esc(f.label)}${f.required ? " *" : ""}</label><input data-step="${step.id}" data-key="${esc(f.key)}" value="${esc(v)}" oninput="saveDraft(${step.id})" /></div>`;
     }).join("");
+    const notesValue = vals[STEP_NOTES_KEY] || "";
+    const notesBlock = `
+      <div class="field notes">
+        <label>备注</label>
+        <textarea data-step="${step.id}" data-key="${STEP_NOTES_KEY}" oninput="saveDraft(${step.id})" placeholder="记录本步骤的观察、异常、样品情况或临时想法">${esc(notesValue)}</textarea>
+      </div>`;
     const photos = (step.photo_paths || []).map((p,i) => `<a href="/photos/${esc(p)}" target="_blank">照片${i+1}</a>`).join("");
     const timerBlock = totalSeconds > 0 ? `
       <div class="timer" id="timer-box-${step.id}">
@@ -626,6 +641,7 @@ function renderSteps(items){
       <div class="desc">${renderDescription(step)}</div>
       ${timerBlock}
       ${fields}
+      ${notesBlock}
       ${photoBlock}
       <div class="actions">
         <button onclick="saveAndSync(${step.id})">保存</button>

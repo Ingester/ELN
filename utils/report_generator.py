@@ -10,6 +10,8 @@ from typing import Optional
 from db.models import Experiment, Step, StorageItem, Box
 from utils.inline_editor import render_plain
 
+STEP_NOTES_KEY = "__eln_step_notes"
+
 
 def generate_report(
     experiment: Experiment,
@@ -141,6 +143,13 @@ def _render_step(step: Step, timer_events: list[dict] | None = None) -> list[str
                 lines.append(f"- {f.label}：{val}")
             else:
                 lines.append(f"- {f.label}：*(未填写)*")
+        lines.append("")
+
+    notes = str(values.get(STEP_NOTES_KEY, "") or "").strip()
+    if notes:
+        lines.append("**备注**：")
+        lines.append("")
+        lines.append(notes)
         lines.append("")
 
     # Timer info
