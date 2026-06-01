@@ -134,7 +134,7 @@ class CameraWidget(ft.Column):
         )
 
     def _api_base_url(self) -> str:
-        configured = os.environ.get("ELN_API_PUBLIC_URL", "").rstrip("/")
+        configured = "" if os.environ.get("ELN_DYNAMIC_PUBLIC_URL") == "1" else os.environ.get("ELN_API_PUBLIC_URL", "").rstrip("/")
         if configured:
             return configured
         try:

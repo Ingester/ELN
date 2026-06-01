@@ -203,7 +203,7 @@ def build_home_view(
         _open_overlay(page, dlg)
 
     def _native_runner_url() -> str:
-        configured = os.environ.get("ELN_API_PUBLIC_URL", "").rstrip("/")
+        configured = "" if os.environ.get("ELN_DYNAMIC_PUBLIC_URL") == "1" else os.environ.get("ELN_API_PUBLIC_URL", "").rstrip("/")
         if configured:
             return configured
         try:

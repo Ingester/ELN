@@ -27,6 +27,7 @@ if __name__ == "__main__":
     port = _env_int("ELN_WEB_PORT", 8550)
 
     os.environ["ELN_WEB_MODE"] = "1"
+    os.environ["ELN_DYNAMIC_PUBLIC_URL"] = "1"
     open_browser = os.environ.get("ELN_WEB_OPEN", "0") == "1"
     if not open_browser:
         os.environ["FLET_FORCE_WEB_SERVER"] = "1"
@@ -38,9 +39,6 @@ if __name__ == "__main__":
     except Exception:
         lan_ip = "127.0.0.1"
 
-    os.environ.setdefault("ELN_API_PUBLIC_URL", f"http://{lan_ip}:8000")
-    os.environ.setdefault("ELN_WEB_PUBLIC_URL", f"http://{lan_ip}:{port}")
-
     try:
         from server.startup import start_server
         start_server()
@@ -49,6 +47,7 @@ if __name__ == "__main__":
 
     print(f"Starting ELN Web at http://{host}:{port}")
     print(f"iPhone LAN URL: http://{lan_ip}:{port}")
+    print("Public URLs are resolved dynamically; restart after switching networks if the current page is already open.")
     print("Set ELN_WEB_OPEN=1 if you want it to open the browser automatically.")
 
     try:

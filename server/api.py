@@ -1778,7 +1778,7 @@ def _eln_step_url(experiment_id: int, step_id: int) -> str:
 
 
 def _web_base_url() -> str:
-    configured = os.environ.get("ELN_WEB_PUBLIC_URL", "").rstrip("/")
+    configured = "" if os.environ.get("ELN_DYNAMIC_PUBLIC_URL") == "1" else os.environ.get("ELN_WEB_PUBLIC_URL", "").rstrip("/")
     if configured:
         return configured
     try:
