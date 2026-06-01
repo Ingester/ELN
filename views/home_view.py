@@ -220,6 +220,8 @@ def build_home_view(
             if s.experiment_id == exp_id and s.status in ("running", "paused", "overtime")
         ]
         if not active:
+            active = _active_timer_records_from_db(exp_id)
+        if not active:
             return {
                 "visible": False,
                 "icon": ft.Icons.TIMER_OUTLINED,
@@ -228,18 +230,21 @@ def build_home_view(
             }
 
         state = active[0]
-        if state.status == "overtime":
-            mins = state.overtime_seconds // 60
-            secs = state.overtime_seconds % 60
+        status = _get(state, "status", "idle")
+        remaining_seconds = int(_get(state, "remaining_seconds", 0) or 0)
+        overtime_seconds = int(_get(state, "overtime_seconds", 0) or 0)
+        if status == "overtime":
+            mins = overtime_seconds // 60
+            secs = overtime_seconds % 60
             return {
                 "visible": True,
                 "icon": ft.Icons.ERROR_OUTLINE,
                 "text": f"{'Overtime' if english else '超时中'}: +{mins:02d}:{secs:02d}",
                 "color": ft.Colors.RED_600,
             }
-        elif state.status == "paused":
-            mins = state.remaining_seconds // 60
-            secs = state.remaining_seconds % 60
+        elif status == "paused":
+            mins = remaining_seconds // 60
+            secs = remaining_seconds % 60
             return {
                 "visible": True,
                 "icon": ft.Icons.PAUSE_CIRCLE_OUTLINE,
@@ -247,14 +252,62 @@ def build_home_view(
                 "color": ft.Colors.GREY_600,
             }
         else:
-            mins = state.remaining_seconds // 60
-            secs = state.remaining_seconds % 60
+            mins = remaining_seconds // 60
+            secs = remaining_seconds % 60
             return {
                 "visible": True,
                 "icon": ft.Icons.TIMER_OUTLINED,
                 "text": f"{'Remaining' if english else '剩余'} {mins:02d}:{secs:02d}",
                 "color": ft.Colors.ORANGE_600,
             }
+
+    def _active_timer_records_from_db(exp_id: int) -> list[dict]:
+        """Fallback for timers controlled by the native browser page."""
+        if not hasattr(data_provider, "list_active_timers"):
+            return []
+        try:
+            records = data_provider.list_active_timers()
+        except Exception as ex:
+            _debug_log(f"list_active_timers failed: {type(ex).__name__}: {ex}")
+            return []
+        payloads = []
+        now = datetime.now(timezone.utc)
+        for rec in records:
+            if int(_get(rec, "experiment_id", 0) or 0) != int(exp_id):
+                continue
+            status = _get(rec, "status", "idle")
+            remaining = int(_get(rec, "remaining_seconds", 0) or 0)
+            overtime = int(_get(rec, "overtime_seconds", 0) or 0)
+            updated_at = _parse_dt(_get(rec, "updated_at", ""))
+            if updated_at and status == "running":
+                elapsed = max(0, int((now - updated_at).total_seconds()))
+                if elapsed >= remaining:
+                    status = "overtime"
+                    overtime = max(overtime, elapsed - remaining)
+                    remaining = 0
+                else:
+                    remaining -= elapsed
+            elif updated_at and status == "overtime":
+                overtime += max(0, int((now - updated_at).total_seconds()))
+            payloads.append({
+                "experiment_id": _get(rec, "experiment_id"),
+                "step_id": _get(rec, "step_id"),
+                "status": status,
+                "remaining_seconds": remaining,
+                "overtime_seconds": overtime,
+            })
+        return payloads
+
+    def _parse_dt(value: str):
+        if not value:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            return None
 
     def _build_timer_line(exp_id: int) -> ft.Control:
         payload = _timer_payload(exp_id)
