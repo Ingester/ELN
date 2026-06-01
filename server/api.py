@@ -267,6 +267,7 @@ let experiments = [];
 const STEP_NOTES_KEY = "__eln_step_notes";
 const timerSync = {};
 const timerLastSync = {};
+const initializedStepPosition = {};
 let modalSaveHandler = null;
 
 function getQueue(){ try { return JSON.parse(localStorage.getItem(LS.queue) || "[]"); } catch { return []; } }
@@ -330,6 +331,7 @@ function renderExperiments(exps){
 async function selectExperiment(id){
   selectedExperiment = id;
   localStorage.setItem(LS.selected, id);
+  initializedStepPosition[id] = false;
   await loadSteps(id);
 }
 
@@ -342,6 +344,8 @@ async function loadSteps(expId){
     steps = JSON.parse(localStorage.getItem(stepKey(expId)) || "[]");
     net("离线缓存", false);
   }
+  await restoreTimersFromServer(expId);
+  ensureInitialStepPosition(expId);
   renderSteps(steps);
 }
 
@@ -378,6 +382,15 @@ function setCurrentStepIndex(idx){
   if(!selectedExperiment) return;
   const safe = Math.min(Math.max(0, idx), Math.max(0, steps.length - 1));
   localStorage.setItem(stepIndexKey(selectedExperiment), String(safe));
+}
+
+function ensureInitialStepPosition(expId){
+  if(initializedStepPosition[expId]) return;
+  if(!steps.length){ initializedStepPosition[expId] = true; return; }
+  const open = steps.findIndex(s => !s.completed_at);
+  const idx = open >= 0 ? open : steps.length - 1;
+  localStorage.setItem(stepIndexKey(expId), String(idx));
+  initializedStepPosition[expId] = true;
 }
 
 function goStep(delta){
@@ -808,13 +821,105 @@ function fmt(sec){
   return String(m).padStart(2,"0") + ":" + String(s).padStart(2,"0");
 }
 
+function parseServerTime(value){
+  const t = Date.parse(value || "");
+  return Number.isFinite(t) ? t : Date.now();
+}
+
+function serverTimerToLocal(record){
+  const total = Math.max(0, parseInt(record.total_seconds || 0, 10) || 0);
+  const remainingAtServer = Math.max(0, parseInt(record.remaining_seconds || 0, 10) || 0);
+  const overtimeAtServer = Math.max(0, parseInt(record.overtime_seconds || 0, 10) || 0);
+  const updatedAt = parseServerTime(record.updated_at);
+  const elapsed = Math.max(0, Math.floor((Date.now() - updatedAt) / 1000));
+  if(record.status === "running"){
+    if(elapsed >= remainingAtServer){
+      return {
+        status:"overtime",
+        total,
+        remaining:0,
+        pausedRemaining:0,
+        overtime:overtimeAtServer + elapsed - remainingAtServer,
+        startedAt:null,
+        updatedAt:Date.now()
+      };
+    }
+    const remaining = remainingAtServer - elapsed;
+    return {
+      status:"running",
+      total,
+      remaining,
+      pausedRemaining:remaining,
+      startedAt:Date.now(),
+      updatedAt:Date.now()
+    };
+  }
+  if(record.status === "overtime"){
+    return {
+      status:"overtime",
+      total,
+      remaining:0,
+      pausedRemaining:0,
+      overtime:overtimeAtServer + elapsed,
+      startedAt:null,
+      updatedAt:Date.now()
+    };
+  }
+  if(record.status === "paused"){
+    return {
+      status:"paused",
+      total,
+      remaining:remainingAtServer,
+      pausedRemaining:remainingAtServer,
+      startedAt:null,
+      updatedAt:Date.now()
+    };
+  }
+  return {status:"idle", total, remaining:total, pausedRemaining:total, startedAt:null, updatedAt:Date.now()};
+}
+
+async function restoreTimersFromServer(expId){
+  try {
+    const active = await api("/api/timers/active");
+    const timers = getTimers();
+    for(const record of active){
+      if(String(record.experiment_id) !== String(expId)) continue;
+      timers[record.step_id] = serverTimerToLocal(record);
+      timerLastSync[record.step_id] = Date.now();
+    }
+    setTimers(timers);
+  } catch(e) {
+    // 离线时继续使用本机缓存。
+  }
+}
+
 function timerState(stepId, total){
   const timers = getTimers();
   const t = timers[stepId];
-  if(!t) return {status:"idle", total, remaining:total, startedAt:null, pausedRemaining:total};
+  if(!t) return {status:"idle", total, remaining:total, startedAt:null, pausedRemaining:total, updatedAt:Date.now()};
   if(t.status === "running"){
-    const elapsed = Math.floor((Date.now() - t.startedAt) / 1000);
-    return {...t, remaining: t.pausedRemaining - elapsed};
+    const elapsed = Math.max(0, Math.floor((Date.now() - (t.startedAt || Date.now())) / 1000));
+    const remaining = (t.pausedRemaining ?? t.remaining ?? total) - elapsed;
+    if(remaining <= 0){
+      return {
+        ...t,
+        status:"overtime",
+        remaining:0,
+        pausedRemaining:0,
+        overtime:Math.abs(remaining),
+        updatedAt:Date.now()
+      };
+    }
+    return {...t, remaining, pausedRemaining:remaining};
+  }
+  if(t.status === "overtime"){
+    const elapsed = Math.max(0, Math.floor((Date.now() - (t.updatedAt || Date.now())) / 1000));
+    return {
+      ...t,
+      remaining:0,
+      pausedRemaining:0,
+      overtime:Math.max(0, Math.floor(t.overtime || 0)) + elapsed
+    };
   }
   const pausedRemaining = t.pausedRemaining ?? t.remaining ?? total;
   return {...t, remaining: pausedRemaining, pausedRemaining};
@@ -852,10 +957,11 @@ async function tellComputerTimerState(expId, stepId, state, patchStep=false){
         body: JSON.stringify(patchPayload(stepId))
       });
     }
+    const overtimeSeconds = Math.max(0, Math.floor(state.overtime ?? (state.remaining < 0 ? Math.abs(state.remaining) : 0) ?? 0));
     const payload = {
       total_seconds: state.total,
-      remaining_seconds: Math.max(0, Math.floor(state.remaining ?? state.pausedRemaining ?? state.total)),
-      overtime_seconds: state.remaining < 0 ? Math.abs(Math.floor(state.remaining)) : 0,
+      remaining_seconds: state.status === "overtime" ? 0 : Math.max(0, Math.floor(state.remaining ?? state.pausedRemaining ?? state.total)),
+      overtime_seconds: overtimeSeconds,
       status: state.status,
       action: state.action || "sync",
       elapsed_seconds: Math.max(0, Math.floor(state.elapsedSeconds ?? elapsedForState(state)))
@@ -883,7 +989,7 @@ function startLocalTimer(expId, stepId, total){
   const timers = getTimers();
   const current = timerState(stepId, total);
   const remaining = current.status === "paused" ? current.remaining : total;
-  timers[stepId] = {status:"running", total, pausedRemaining:remaining, remaining, startedAt:Date.now()};
+  timers[stepId] = {status:"running", total, pausedRemaining:remaining, remaining, startedAt:Date.now(), updatedAt:Date.now()};
   setTimers(timers);
   const next = timerState(stepId, total);
   next.action = "start";
@@ -896,7 +1002,7 @@ function pauseLocalTimer(expId, stepId){
   const timers = getTimers();
   const current = timerState(stepId, timers[stepId]?.total || 0);
   const remaining = Math.max(0, current.remaining);
-  timers[stepId] = {status:"paused", total:current.total, pausedRemaining:remaining, remaining, startedAt:null};
+  timers[stepId] = {status:"paused", total:current.total, pausedRemaining:remaining, remaining, startedAt:null, updatedAt:Date.now()};
   setTimers(timers);
   const next = timerState(stepId, current.total);
   next.action = "pause";
@@ -908,7 +1014,7 @@ function pauseLocalTimer(expId, stepId){
 function resetLocalTimer(expId, stepId, total, action="reset"){
   const timers = getTimers();
   const current = timerState(stepId, timers[stepId]?.total || total);
-  timers[stepId] = {status:"idle", total, pausedRemaining:total, remaining:total, startedAt:null};
+  timers[stepId] = {status:"idle", total, pausedRemaining:total, remaining:total, startedAt:null, updatedAt:Date.now()};
   setTimers(timers);
   const next = timerState(stepId, total);
   next.action = action;
@@ -935,13 +1041,30 @@ function refreshTimers(){
     const box = document.getElementById("timer-box-"+step.id);
     const text = document.getElementById("timer-status-"+step.id);
     if(!display || !box) continue;
-    if(current.status === "running" && current.remaining <= 0){
-      display.textContent = "+" + fmt(Math.abs(current.remaining));
+    if(current.status === "overtime" || (current.status === "running" && current.remaining <= 0)){
+      const overtime = Math.max(0, Math.floor(current.overtime ?? Math.abs(current.remaining || 0)));
+      display.textContent = "+" + fmt(overtime);
       box.classList.add("over");
       if(text) text.textContent = "时间到。电脑端会响铃；当前页面同步显示。";
+      if(timers[step.id]?.status !== "overtime"){
+        timers[step.id] = {
+          ...(timers[step.id] || {}),
+          status:"overtime",
+          total:current.total,
+          remaining:0,
+          pausedRemaining:0,
+          overtime,
+          startedAt:null,
+          updatedAt:Date.now()
+        };
+        setTimers(timers);
+      } else if(Math.abs((timers[step.id]?.overtime || 0) - overtime) > 5){
+        timers[step.id] = {...timers[step.id], overtime, updatedAt:Date.now()};
+        setTimers(timers);
+      }
       if(!timers[step.id]?.alerted){
         try { navigator.vibrate && navigator.vibrate([300,120,300,120,600]); } catch {}
-        timers[step.id] = {...timers[step.id], alerted:true};
+        timers[step.id] = {...(timers[step.id] || {}), alerted:true};
         setTimers(timers);
       }
     } else {
@@ -949,7 +1072,7 @@ function refreshTimers(){
       box.classList.remove("over");
       if(text) text.textContent = current.status === "running" ? "计时中" : (current.status === "paused" ? "已暂停" : "未开始");
     }
-    if(current.status === "running" && current.remaining > 0 && Date.now() - (timerLastSync[step.id] || 0) > 3000){
+    if((current.status === "running" || current.status === "overtime") && Date.now() - (timerLastSync[step.id] || 0) > 3000){
       queueComputerTimerState(step.experiment_id, step.id, current);
     }
   }
