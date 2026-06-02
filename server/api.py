@@ -520,7 +520,7 @@ function renderSteps(items){
       <label>备注</label>
       <textarea data-step="${step.id}" data-key="${STEP_NOTES_KEY}" oninput="saveDraft(${step.id})" placeholder="记录本步骤的观察、异常、样品情况或临时想法">${esc(notesValue)}</textarea>
     </div>`;
-  const photos = (step.photo_paths || []).map((p,i) => `<a href="/photos/${esc(p)}" target="_blank">照片${i+1}</a>`).join("");
+  const photos = (step.photo_paths || []).map((p,i) => `<a href="/photos/${esc(p)}" target="_blank">附件${i+1}</a>`).join("");
   const timerBlock = totalSeconds > 0 ? `
     <div class="timer" id="timer-box-${step.id}">
       <div class="small">本地计时 · 电脑端负责响铃</div>
@@ -537,19 +537,21 @@ function renderSteps(items){
       </div>
       <div class="status" id="timer-status-${step.id}"></div>
     </div>` : "";
-  const photoBlock = step.has_camera ? `
+  const photoBlock = `
     <div class="field">
-      <label>照片</label>
-      <div class="photos">${photos || '<span class="small">暂无照片</span>'}</div>
+      <label>附件 / 拍照记录</label>
+      <div class="photos">${photos || '<span class="small">暂无附件</span>'}</div>
       <form class="photo-row" onsubmit="uploadPhoto(event, ${step.id})">
         <label class="button" for="cam-${step.id}">拍照</label>
         <label class="button secondary" for="gal-${step.id}">相册</label>
+        <label class="button secondary" for="any-${step.id}">文件</label>
         <input id="cam-${step.id}" name="file" type="file" accept="image/*" capture="environment" onchange="markFile(this)" />
         <input id="gal-${step.id}" name="file2" type="file" accept="image/*" onchange="markFile(this)" />
+        <input id="any-${step.id}" name="file3" type="file" onchange="markFile(this)" />
         <button type="submit">上传</button>
         <span class="small" id="file-${step.id}">未选择</span>
       </form>
-    </div>` : "";
+    </div>`;
   const wrapupBlock = isLast ? `
     <div class="wrapup">
       <div class="section-head">
@@ -1162,8 +1164,8 @@ function markFile(input){
 async function uploadPhoto(event, stepId){
   event.preventDefault();
   const form = event.currentTarget;
-  const file = form.file.files[0] || form.file2.files[0];
-  if(!file){ document.getElementById("file-"+stepId).textContent = "请先选择照片"; return; }
+  const file = form.file.files[0] || form.file2.files[0] || form.file3.files[0];
+  if(!file){ document.getElementById("file-"+stepId).textContent = "请先选择照片或文件"; return; }
   const fd = new FormData();
   fd.append("file", file);
   try {
@@ -1501,7 +1503,8 @@ async def upload_photo(
     if not step:
         raise HTTPException(404, "Step not found")
 
-    # Save to photos/{exp_id}/{step_id}_{timestamp}.jpg
+    # Save to photos/{exp_id}/{step_id}_{timestamp}.*. The column is named
+    # photo_paths for compatibility, but it can also store general attachments.
     photos_dir = _photos_dir()
     sub_dir = os.path.join(photos_dir, str(step.experiment_id))
     os.makedirs(sub_dir, exist_ok=True)
@@ -1518,7 +1521,7 @@ async def upload_photo(
             os.remove(filepath)
         except OSError:
             pass
-        raise HTTPException(400, "照片文件为空，请重新拍照或选择图片")
+        raise HTTPException(400, "文件为空，请重新拍照或选择文件")
 
     # Relative path for URL construction
     rel_path = f"{step.experiment_id}/{filename}"
@@ -1540,7 +1543,7 @@ def web_upload_form(step_id: int):
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>上传照片 · Step {step.step_index + 1}</title>
+  <title>上传照片/文件 · Step {step.step_index + 1}</title>
   <style>
     body {{ font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 40px; color: #222; }}
     main {{ max-width: 560px; }}
@@ -1562,33 +1565,47 @@ def web_upload_form(step_id: int):
       <a class="button" href="{app_url}">返回 ELN</a>
       <a class="button secondary" href="javascript:history.back()">返回上一页</a>
     </div>
-    <h1>上传照片</h1>
+    <h1>上传照片/文件</h1>
     <p><b>{_html_escape(step.title)}</b></p>
-    <p class="muted">在 iPhone 上点“拍照”会打开相机；也可以从相册选择。上传成功后，回到 ELN 页面点击“刷新照片”。</p>
+    <p class="muted">在 iPhone 上点“拍照”会打开相机；也可以从相册选择，或上传任意文件。上传成功后，回到 ELN 页面刷新即可看到记录。</p>
     <form method="post" enctype="multipart/form-data">
       <div class="upload-actions">
         <label class="button" for="cameraFile">拍照</label>
         <label class="button secondary" for="galleryFile">从相册选择</label>
+        <label class="button secondary" for="anyFile">选择文件</label>
       </div>
       <input id="cameraFile" name="file" type="file" accept="image/*" capture="environment" />
       <input id="galleryFile" name="file" type="file" accept="image/*" />
-      <div id="filename" class="filename">尚未选择照片</div>
+      <input id="anyFile" name="file" type="file" />
+      <div id="filename" class="filename">尚未选择照片或文件</div>
       <button type="submit">上传</button>
     </form>
   </main>
   <script>
     const cameraFile = document.getElementById("cameraFile");
     const galleryFile = document.getElementById("galleryFile");
+    const anyFile = document.getElementById("anyFile");
+    const uploadForm = document.querySelector("form");
     const filename = document.getElementById("filename");
     function showName(input) {{
       if (input.files && input.files.length) {{
         filename.textContent = "已选择：" + input.files[0].name;
         if (input === cameraFile) galleryFile.value = "";
+        if (input === cameraFile) anyFile.value = "";
         if (input === galleryFile) cameraFile.value = "";
+        if (input === galleryFile) anyFile.value = "";
+        if (input === anyFile) cameraFile.value = "";
+        if (input === anyFile) galleryFile.value = "";
       }}
     }}
     cameraFile.addEventListener("change", () => showName(cameraFile));
     galleryFile.addEventListener("change", () => showName(galleryFile));
+    anyFile.addEventListener("change", () => showName(anyFile));
+    uploadForm.addEventListener("submit", () => {{
+      [cameraFile, galleryFile, anyFile].forEach((input) => {{
+        if (!input.files || !input.files.length) input.disabled = true;
+      }});
+    }});
   </script>
 </body>
 </html>
@@ -1735,6 +1752,7 @@ async def web_upload_photo(step_id: int, file: UploadFile = File(...)):
     if step:
         _write_eln_return_target(step.experiment_id, step_id)
     app_url = _eln_step_url(step.experiment_id, step_id) if step else _web_base_url()
+    preview_html = _attachment_preview_html(result["path"], "上传文件")
     return _html_response(f"""
 <!doctype html>
 <html lang="zh-CN">
@@ -1752,15 +1770,28 @@ async def web_upload_photo(step_id: int, file: UploadFile = File(...)):
 </head>
 <body>
   <h1>上传成功</h1>
-  <p>照片已经保存到 ELN。回到实验页面点击“刷新照片”。</p>
+  <p>照片/文件已经保存到 ELN。回到实验页面刷新即可看到记录。</p>
   <p>
     <a class="button" href="{app_url}">返回 ELN</a>
-    <a class="button secondary" href="/web/upload/{step_id}">继续上传另一张</a>
+    <a class="button secondary" href="/web/upload/{step_id}">继续上传</a>
   </p>
-  <img src="{result['url']}" alt="uploaded photo" />
+  {preview_html}
 </body>
 </html>
 """)
+
+
+def _is_image_attachment(path: str) -> bool:
+    return os.path.splitext(path.lower())[1] in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
+
+
+def _attachment_preview_html(path: str, label: str) -> str:
+    safe_path = _html_escape(path)
+    safe_label = _html_escape(label)
+    url = f"/photos/{safe_path}"
+    if _is_image_attachment(path):
+        return f'<img src="{url}" alt="{safe_label}" />'
+    return f'<p><a href="{url}" target="_blank">{safe_label}：{safe_path}</a></p>'
 
 
 def _html_escape(value: str) -> str:
@@ -2106,12 +2137,13 @@ def run_report_page(exp_id: int, saved: str = Query("")):
     photo_html = []
     for step in db_ops.get_steps(exp_id):
         for i, path in enumerate(step.get_photo_paths(), 1):
-            photo_html.append(f"""
-            <figure>
-              <img src="/photos/{_html_escape(path)}" alt="Step {step.step_index + 1} photo {i}" />
-              <figcaption>Step {step.step_index + 1} · {_html_escape(step.title)} · 照片 {i}</figcaption>
-            </figure>
-            """)
+            label = f"Step {step.step_index + 1} · {step.title} · 附件 {i}"
+            photo_html.append(
+                "<figure>"
+                f"{_attachment_preview_html(path, label)}"
+                f"<figcaption>{_html_escape(label)}</figcaption>"
+                "</figure>"
+            )
     saved_block = f'<p class="saved">已保存：{_html_escape(saved)}</p>' if saved else ""
     return _html_response(f"""
 <!doctype html>
@@ -2144,8 +2176,8 @@ def run_report_page(exp_id: int, saved: str = Query("")):
   <main>
     {saved_block}
     <section>
-      <h2>照片预览</h2>
-      {"".join(photo_html) if photo_html else '<p>暂无照片。</p>'}
+      <h2>附件 / 照片预览</h2>
+      {"".join(photo_html) if photo_html else '<p>暂无附件。</p>'}
     </section>
     <section>
       <h2>Markdown 报告</h2>

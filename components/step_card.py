@@ -245,30 +245,28 @@ class StepCard(ft.Container):
             margin=ft.Margin.symmetric(vertical=4),
         )
 
-        # ── Camera ───────────────────────────────
-        camera_section = ft.Container()
-        if step.has_camera:
-            self._camera_widget = CameraWidget(
-                step_id=step.id,
-                experiment_id=step.experiment_id,
-                existing_paths=step.get_photo_paths(),
-                camera_required=step.camera_required,
-                on_photo_added=self._on_photo_added,
-                on_skip=self._on_photo_skip,
-                is_mobile=self.is_mobile,
-                data_provider=self.data_provider,
-            )
-            camera_section = ft.Container(
-                content=ft.Column([
-                    ft.Text("拍照记录", size=14, weight=ft.FontWeight.W_500,
-                            color=ft.Colors.GREY_700),
-                    self._camera_widget,
-                ], spacing=8),
-                border=ft.Border.all(1, ft.Colors.GREY_200),
-                border_radius=8,
-                padding=12,
-                margin=ft.Margin.symmetric(vertical=4),
-            )
+        # ── Attachments / Camera ─────────────────
+        self._camera_widget = CameraWidget(
+            step_id=step.id,
+            experiment_id=step.experiment_id,
+            existing_paths=step.get_photo_paths(),
+            camera_required=step.camera_required if step.has_camera else True,
+            on_photo_added=self._on_photo_added,
+            on_skip=self._on_photo_skip if step.has_camera else None,
+            is_mobile=self.is_mobile,
+            data_provider=self.data_provider,
+        )
+        camera_section = ft.Container(
+            content=ft.Column([
+                ft.Text("附件 / 拍照记录", size=14, weight=ft.FontWeight.W_500,
+                        color=ft.Colors.GREY_700),
+                self._camera_widget,
+            ], spacing=8),
+            border=ft.Border.all(1, ft.Colors.GREY_200),
+            border_radius=8,
+            padding=12,
+            margin=ft.Margin.symmetric(vertical=4),
+        )
 
         # ── Final wrap-up storage section ────────
         storage_section = ft.Container()

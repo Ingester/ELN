@@ -4,6 +4,7 @@ Generates a Markdown experiment report from experiment + steps + storage data.
 """
 
 from __future__ import annotations
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -177,15 +178,18 @@ def _render_step(step: Step, timer_events: list[dict] | None = None) -> list[str
             lines.extend(_render_timer_events(timer_events))
         lines.append("")
 
-    # Photos
+    # Attachments / Photos
     photo_paths = step.get_photo_paths()
     if photo_paths:
-        lines.append("**照片**：")
+        lines.append("**附件 / 照片**：")
         lines.append("")
         for i, path in enumerate(photo_paths, 1):
-            lines.append(f"- 照片 {i}：`{path}`")
+            lines.append(f"- 附件 {i}：`{path}`")
             lines.append("")
-            lines.append(f"![照片 {i}](../photos/{path})")
+            if _is_image_attachment(path):
+                lines.append(f"![附件 {i}](../photos/{path})")
+            else:
+                lines.append(f"[打开附件 {i}](../photos/{path})")
             lines.append("")
         lines.append("")
     elif step.has_camera and step.photo_pending:
@@ -198,6 +202,12 @@ def _render_step(step: Step, timer_events: list[dict] | None = None) -> list[str
         lines.append("")
 
     return lines
+
+
+def _is_image_attachment(path: str) -> bool:
+    return os.path.splitext(path.lower())[1] in {
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"
+    }
 
 
 def _render_timer_events(events: list[dict]) -> list[str]:

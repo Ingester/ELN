@@ -71,6 +71,11 @@ def build_report_view(
             return f"Step {int(step.get('step_index', 0)) + 1} · {step.get('title', '')}"
         return f"Step {step.step_index + 1} · {step.title}"
 
+    def _is_image_attachment(path: str) -> bool:
+        return os.path.splitext(path.lower())[1] in {
+            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"
+        }
+
     def _build_photo_gallery() -> ft.Control:
         rows: list[ft.Control] = []
         for step in data_provider.get_steps(experiment_id):
@@ -80,10 +85,18 @@ def build_report_view(
             thumbs = []
             for i, path in enumerate(paths, 1):
                 src = _photo_src(path)
+                if _is_image_attachment(path):
+                    body = ft.Image(src=src, fit=ft.BoxFit.COVER, width=180, height=120)
+                else:
+                    body = ft.TextButton(
+                        "打开文件",
+                        on_click=lambda _, u=src: page.launch_url(u),
+                        style=ft.ButtonStyle(color=ft.Colors.ORANGE_600),
+                    )
                 thumbs.append(ft.Container(
                     content=ft.Column([
-                        ft.Image(src=src, fit=ft.BoxFit.COVER, width=180, height=120),
-                        ft.Text(f"照片 {i}", size=12, color=ft.Colors.GREY_700),
+                        body,
+                        ft.Text(f"附件 {i}", size=12, color=ft.Colors.GREY_700),
                         ft.Text(path, size=11, color=ft.Colors.GREY_500, selectable=True),
                     ], spacing=4),
                     border=ft.Border.all(1, ft.Colors.GREY_200),
@@ -103,7 +116,7 @@ def build_report_view(
         return ft.Container(
             content=ft.Column([
                 ft.Divider(),
-                ft.Text("照片预览", size=18, weight=ft.FontWeight.BOLD),
+                ft.Text("附件 / 照片预览", size=18, weight=ft.FontWeight.BOLD),
                 *rows,
             ], spacing=8),
         )

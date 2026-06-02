@@ -69,24 +69,24 @@ class CameraWidget(ft.Column):
 
         if self._web_mode:
             self._btn_photo = ft.ElevatedButton(
-                "打开上传页面",
+                "上传照片/文件",
                 on_click=self._open_web_uploader,
                 bgcolor=ft.Colors.ORANGE_600,
                 color=ft.Colors.WHITE,
                 tooltip="打开浏览器原生上传页面",
             )
             self._btn_fallback = ft.Container()
-            self._status.value = "Flet Web 当前页不支持 FilePicker；请用上传页面拍照或选相册"
+            self._status.value = "可在上传页面拍照、选相册或上传文件"
         else:
             self._btn_photo = ft.ElevatedButton(
-                "拍照 / 选择图片",
+                "上传照片/文件",
                 on_click=self._pick_file,
                 bgcolor=ft.Colors.ORANGE_600,
                 color=ft.Colors.WHITE,
             )
             self._btn_fallback = ft.Container()
         self._btn_refresh = ft.TextButton(
-            "刷新照片",
+            "刷新附件",
             on_click=self._refresh_from_provider,
             visible=self._web_mode,
         )
@@ -122,8 +122,7 @@ class CameraWidget(ft.Column):
             return
         files = await self._file_picker.pick_files(
             allow_multiple=False,
-            allowed_extensions=["jpg", "jpeg", "png", "heic", "heif"],
-            file_type=ft.FilePickerFileType.IMAGE,
+            file_type=ft.FilePickerFileType.ANY,
         )
         self._handle_picked_files(files)
 
@@ -147,7 +146,7 @@ class CameraWidget(ft.Column):
         url = self._web_upload_url()
         try:
             self.page.launch_url(url, web_popup_window_name=ft.UrlTarget.SELF)
-            self._status.value = "上传完成后回到这里点「刷新照片」"
+            self._status.value = "上传完成后回到这里点「刷新附件」"
         except Exception:
             self._status.value = f"请在浏览器打开：{url}"
         self.update()
@@ -228,8 +227,8 @@ class CameraWidget(ft.Column):
                 url = path
             self._photo_list.controls.append(
                 ft.Row([
-                    ft.Icon(ft.Icons.IMAGE_OUTLINED, color=ft.Colors.ORANGE_400),
-                    ft.Text(f"照片 {i}", size=13),
+                    ft.Icon(ft.Icons.ATTACH_FILE, color=ft.Colors.ORANGE_400),
+                    ft.Text(f"附件 {i}", size=13),
                     ft.TextButton(
                         "查看",
                         on_click=lambda _, u=url: self._view_photo(u),
@@ -239,15 +238,7 @@ class CameraWidget(ft.Column):
             )
 
     def _view_photo(self, url: str) -> None:
-        dlg = ft.AlertDialog(
-            content=ft.Image(src=url, fit=ft.BoxFit.CONTAIN,
-                             width=400, height=400),
-            actions=[ft.TextButton("关闭",
-                                    on_click=lambda _: self._close_dlg(dlg))],
-        )
-        _open_overlay(self.page, dlg)
-        dlg.open = True
-        self.page.update()
+        self.page.launch_url(url)
 
     def _close_dlg(self, dlg) -> None:
         dlg.open = False
