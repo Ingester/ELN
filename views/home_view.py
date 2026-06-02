@@ -214,13 +214,12 @@ def build_home_view(
 
     def _timer_payload(exp_id: int) -> dict:
         """Find any active timer for this experiment and return render data."""
+        active = _active_timer_records_from_db(exp_id)
         all_states = tm.get_all_states()
-        active = [
+        active += [
             s for s in all_states
             if s.experiment_id == exp_id and s.status in ("running", "paused", "overtime")
         ]
-        if not active:
-            active = _active_timer_records_from_db(exp_id)
         if not active:
             return {
                 "visible": False,
@@ -263,18 +262,27 @@ def build_home_view(
 
     def _active_timer_records_from_db(exp_id: int) -> list[dict]:
         """Fallback for timers controlled by the native browser page."""
-        if not hasattr(data_provider, "list_active_timers"):
-            return []
+        records = []
+        seen: set[tuple[int, int]] = set()
+        if hasattr(data_provider, "list_active_timers"):
+            try:
+                records.extend(data_provider.list_active_timers())
+            except Exception as ex:
+                _debug_log(f"provider list_active_timers failed: {type(ex).__name__}: {ex}")
         try:
-            records = data_provider.list_active_timers()
+            import db.database as db_local
+            records.extend(db_local.list_active_timers())
         except Exception as ex:
-            _debug_log(f"list_active_timers failed: {type(ex).__name__}: {ex}")
-            return []
+            _debug_log(f"db list_active_timers failed: {type(ex).__name__}: {ex}")
         payloads = []
         now = datetime.now(timezone.utc)
         for rec in records:
             if int(_get(rec, "experiment_id", 0) or 0) != int(exp_id):
                 continue
+            key = (int(_get(rec, "experiment_id", 0) or 0), int(_get(rec, "step_id", 0) or 0))
+            if key in seen:
+                continue
+            seen.add(key)
             status = _get(rec, "status", "idle")
             remaining = int(_get(rec, "remaining_seconds", 0) or 0)
             overtime = int(_get(rec, "overtime_seconds", 0) or 0)
