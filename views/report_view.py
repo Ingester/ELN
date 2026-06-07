@@ -6,8 +6,10 @@ Supports copy-to-clipboard and mark experiment as completed.
 
 from __future__ import annotations
 import os
+import re
 import flet as ft
 from typing import Callable, Optional
+from urllib.parse import quote, urlparse
 
 def _open_overlay(page, ctrl):
     """Open a dialog/snackbar compatible with flet 0.70+."""
@@ -37,22 +39,50 @@ def build_report_view(
     _saved_path: list[str] = [""]
     saved_path_text = ft.Text("", size=12, color=ft.Colors.GREY_600, selectable=True)
 
-    def _photo_src(path: str) -> str:
-        if os.environ.get("ELN_WEB_MODE") == "1":
-            return f"{_api_base_url()}/photos/{path}"
-        if hasattr(data_provider, "photo_url"):
-            return data_provider.photo_url(path)
-        return path
-
     def _api_base_url() -> str:
         configured = "" if os.environ.get("ELN_DYNAMIC_PUBLIC_URL") == "1" else os.environ.get("ELN_API_PUBLIC_URL", "").rstrip("/")
         if configured:
             return configured
+        for source in (getattr(page, "url", ""), getattr(page, "route", "")):
+            try:
+                parsed = urlparse(str(source))
+                if parsed.scheme and parsed.hostname:
+                    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+                    return f"{parsed.scheme}://{host}:8000"
+            except Exception:
+                pass
         try:
             from server.startup import get_local_ip
             return f"http://{get_local_ip()}:8000"
         except Exception:
             return "http://127.0.0.1:8000"
+
+    def _photo_src(path: str) -> str:
+        clean_path = str(path).replace("\\", "/").lstrip("/")
+        encoded_path = quote(clean_path, safe="/")
+        if os.environ.get("ELN_WEB_MODE") == "1":
+            return f"{_api_base_url()}/photos/{encoded_path}"
+        if hasattr(data_provider, "photo_url"):
+            return data_provider.photo_url(encoded_path)
+        return path
+
+    def _markdown_for_display(markdown: str) -> str:
+        def _replace_attachment(match) -> str:
+            path = match.group(1).strip()
+            return f"{_api_base_url()}/photos/{quote(path, safe='/')}"
+
+        return re.sub(r"\.\./photos/([^)]+)", _replace_attachment, markdown)
+
+    def _open_attachment(url: str) -> None:
+        page.launch_url(
+            ft.Url(url, target=ft.UrlTarget.BLANK),
+            web_popup_window_name=ft.UrlTarget.BLANK,
+        )
+
+    def _on_markdown_link(e) -> None:
+        url = str(getattr(e, "data", "") or "")
+        if url:
+            _open_attachment(url)
 
     def _photo_paths_from_step(step) -> list[str]:
         if isinstance(step, dict):
@@ -73,7 +103,7 @@ def build_report_view(
 
     def _is_image_attachment(path: str) -> bool:
         return os.path.splitext(path.lower())[1] in {
-            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"
+            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg"
         }
 
     def _build_photo_gallery() -> ft.Control:
@@ -86,18 +116,38 @@ def build_report_view(
             for i, path in enumerate(paths, 1):
                 src = _photo_src(path)
                 if _is_image_attachment(path):
-                    body = ft.Image(src=src, fit=ft.BoxFit.COVER, width=180, height=120)
+                    body = ft.Image(
+                        src=src,
+                        fit=ft.BoxFit.CONTAIN,
+                        width=180,
+                        height=120,
+                        error_content=ft.Icon(
+                            ft.Icons.BROKEN_IMAGE_OUTLINED,
+                            size=40,
+                            color=ft.Colors.GREY_400,
+                        ),
+                    )
                 else:
-                    body = ft.TextButton(
-                        "打开文件",
-                        on_click=lambda _, u=src: page.launch_url(u),
-                        style=ft.ButtonStyle(color=ft.Colors.ORANGE_600),
+                    body = ft.Container(
+                        content=ft.Icon(
+                            ft.Icons.INSERT_DRIVE_FILE_OUTLINED,
+                            size=48,
+                            color=ft.Colors.ORANGE_500,
+                        ),
+                        height=120,
+                        alignment=ft.Alignment.CENTER,
                     )
                 thumbs.append(ft.Container(
                     content=ft.Column([
                         body,
                         ft.Text(f"附件 {i}", size=12, color=ft.Colors.GREY_700),
                         ft.Text(path, size=11, color=ft.Colors.GREY_500, selectable=True),
+                        ft.TextButton(
+                            "打开 / 下载",
+                            icon=ft.Icons.OPEN_IN_NEW,
+                            on_click=lambda _, u=src: _open_attachment(u),
+                            style=ft.ButtonStyle(color=ft.Colors.ORANGE_600),
+                        ),
                     ], spacing=4),
                     border=ft.Border.all(1, ft.Colors.GREY_200),
                     border_radius=8,
@@ -133,13 +183,14 @@ def build_report_view(
             _md_content[0] = md
             report_container.content = ft.Column(
                 [
+                    _build_photo_gallery(),
                     ft.Markdown(
-                        value=md,
+                        value=_markdown_for_display(md),
                         selectable=True,
                         extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
                         code_theme="atom-one-light",
+                        on_tap_link=_on_markdown_link,
                     ),
-                    _build_photo_gallery(),
                 ],
                 spacing=16,
             )

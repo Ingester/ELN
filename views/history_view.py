@@ -35,7 +35,7 @@ def build_history_view(
     page: ft.Page,
     data_provider,
     on_back: Callable[[], None],
-    on_open_report: Callable[[int], None],
+    report_url: Callable[[int], str],
     on_reuse_protocol: Callable[[dict], None],
     on_continue_experiment: Callable[[int], None],
     is_mobile: bool = True,
@@ -121,7 +121,10 @@ def build_history_view(
                     ft.IconButton(
                         ft.Icons.SUMMARIZE_OUTLINED,
                         tooltip=tr("查看报告"),
-                        on_click=lambda _, eid=exp_id: on_open_report(eid),
+                        url=ft.Url(
+                            report_url(exp_id),
+                            target=ft.UrlTarget.SELF,
+                        ),
                         icon_color=ft.Colors.ORANGE_600,
                     ),
                     ft.IconButton(

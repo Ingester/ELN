@@ -208,7 +208,7 @@ def main(page: ft.Page) -> None:
                 page=page,
                 data_provider=data_provider,
                 on_back=lambda: _navigate(ROUTE_HOME),
-                on_open_report=lambda eid: _navigate(ROUTE_REPORT, {"experiment_id": eid}),
+                report_url=_history_report_url,
                 on_reuse_protocol=_create_experiment_and_navigate,
                 on_continue_experiment=_open_existing_experiment,
                 is_mobile=IS_MOBILE,
@@ -220,7 +220,7 @@ def main(page: ft.Page) -> None:
                 page=page,
                 data_provider=data_provider,
                 experiment_id=exp_id,
-                on_back=lambda: _navigate(ROUTE_HOME),
+                on_back=lambda: _navigate(params.get("return_to", ROUTE_HOME)),
                 is_mobile=IS_MOBILE,
             )
 
@@ -327,6 +327,9 @@ def main(page: ft.Page) -> None:
             ),
             web_popup_window_name=ft.UrlTarget.SELF,
         )
+
+    def _history_report_url(exp_id: int) -> str:
+        return f"{_native_runner_url()}/run/report/{int(exp_id)}?return_to=history"
 
     def _parse_protocol(json_str: str):
         from db.models import ProtocolDefinition
@@ -464,6 +467,8 @@ def _path_initial_route(page: ft.Page) -> tuple[str, dict] | None:
         try:
             parsed = urlparse(str(source))
             parts = [p for p in parsed.path.split("/") if p]
+            if parts == ["history"]:
+                return ROUTE_HISTORY, {}
             if len(parts) >= 2 and parts[0] == "stepper":
                 exp_id = int(parts[1])
                 params = {"experiment_id": exp_id}

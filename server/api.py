@@ -1782,16 +1782,36 @@ async def web_upload_photo(step_id: int, file: UploadFile = File(...)):
 
 
 def _is_image_attachment(path: str) -> bool:
-    return os.path.splitext(path.lower())[1] in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
+    return os.path.splitext(path.lower())[1] in {
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg"
+    }
 
 
 def _attachment_preview_html(path: str, label: str) -> str:
     safe_path = _html_escape(path)
     safe_label = _html_escape(label)
-    url = f"/photos/{safe_path}"
+    clean_path = str(path).replace("\\", "/").lstrip("/")
+    url = f"/photos/{quote(clean_path, safe='/')}"
     if _is_image_attachment(path):
-        return f'<img src="{url}" alt="{safe_label}" />'
-    return f'<p><a href="{url}" target="_blank">{safe_label}：{safe_path}</a></p>'
+        return (
+            f'<a href="{url}" target="_blank" rel="noopener">'
+            f'<img src="{url}" alt="{safe_label}" loading="lazy" />'
+            "</a>"
+            '<div class="attachment-actions">'
+            f'<a href="{url}" target="_blank" rel="noopener">打开原图</a>'
+            f'<a href="{url}" download>下载</a>'
+            "</div>"
+        )
+    return (
+        '<div class="file-attachment">'
+        f'<strong>{safe_label}</strong>'
+        f'<span>{safe_path}</span>'
+        '<div class="attachment-actions">'
+        f'<a href="{url}" target="_blank" rel="noopener">打开文件</a>'
+        f'<a href="{url}" download>下载文件</a>'
+        "</div>"
+        "</div>"
+    )
 
 
 def _html_escape(value: str) -> str:
@@ -1802,6 +1822,21 @@ def _html_escape(value: str) -> str:
         .replace(">", "&gt;")
         .replace('"', "&quot;")
     )
+
+
+def _render_markdown_html(markdown: str) -> str:
+    """Render report Markdown safely for the native browser report page."""
+    try:
+        from markdown_it import MarkdownIt
+
+        prepared = str(markdown).replace("../photos/", "/photos/")
+        return (
+            MarkdownIt("commonmark", {"html": False, "linkify": True})
+            .enable("table")
+            .render(prepared)
+        )
+    except Exception:
+        return f"<pre>{_html_escape(markdown)}</pre>"
 
 
 def _eln_step_url(experiment_id: int, step_id: int) -> str:
@@ -2129,11 +2164,25 @@ async def run_storage_finish(exp_id: int):
 
 
 @app.get("/run/report/{exp_id}", response_class=HTMLResponse)
-def run_report_page(exp_id: int, saved: str = Query("")):
+def run_report_page(
+    exp_id: int,
+    request: Request,
+    saved: str = Query(""),
+    return_to: str = Query("experiment"),
+):
     exp = db_ops.get_experiment(exp_id)
     if not exp:
         raise HTTPException(404, "Experiment not found")
+    hostname = request.url.hostname or "127.0.0.1"
+    display_host = f"[{hostname}]" if ":" in hostname else hostname
+    if return_to == "history":
+        back_url = f"{request.url.scheme}://{display_host}:8550/history"
+        back_label = "返回历史"
+    else:
+        back_url = f"/run?experiment_id={exp_id}"
+        back_label = "返回实验"
     markdown = db_ops.get_report(exp_id)
+    report_html = _render_markdown_html(markdown)
     photo_html = []
     for step in db_ops.get_steps(exp_id):
         for i, path in enumerate(step.get_photo_paths(), 1):
@@ -2160,18 +2209,27 @@ def run_report_page(exp_id: int, saved: str = Query("")):
     section {{ background:#fff; border:1px solid #e8e8e8; border-radius:10px; padding:14px; margin-bottom:14px; }}
     button, a.button {{ border:0; border-radius:8px; background:#fb8c00; color:white; padding:10px 14px; text-decoration:none; cursor:pointer; font:inherit; }}
     a.secondary {{ background:#eee; color:#333; }}
-    pre {{ white-space:pre-wrap; word-break:break-word; line-height:1.5; }}
+    pre {{ white-space:pre-wrap; word-break:break-word; line-height:1.5; overflow:auto; }}
+    code {{ background:#f3f3f3; padding:2px 5px; border-radius:4px; }}
+    table {{ width:100%; border-collapse:collapse; margin:12px 0; }}
+    th, td {{ border:1px solid #ccc; padding:8px; text-align:left; vertical-align:top; }}
+    blockquote {{ border-left:4px solid #fb8c00; margin-left:0; padding-left:12px; color:#555; }}
+    .markdown-body {{ line-height:1.6; overflow-wrap:anywhere; }}
     img {{ max-width:min(100%, 640px); border:1px solid #ddd; border-radius:8px; }}
     figure {{ margin:14px 0; }}
     figcaption {{ color:#666; font-size:13px; margin-top:5px; }}
+    .attachment-actions {{ display:flex; gap:14px; margin-top:8px; }}
+    .attachment-actions a {{ color:#e67600; font-weight:600; }}
+    .file-attachment {{ display:flex; flex-direction:column; gap:6px; padding:14px; border:1px solid #ddd; border-radius:8px; }}
+    .file-attachment span {{ color:#666; overflow-wrap:anywhere; }}
     .saved {{ color:#2e7d32; }}
   </style>
 </head>
 <body>
   <header>
-    <a class="button secondary" href="/run?experiment_id={exp_id}">返回实验</a>
+    <a class="button secondary" href="{_html_escape(back_url)}">{back_label}</a>
     <h1>实验报告 · {_html_escape(exp.name)}</h1>
-    <form method="post" action="/run/report/{exp_id}/save"><button type="submit">保存报告</button></form>
+    <form method="post" action="/run/report/{exp_id}/save?return_to={quote(return_to)}"><button type="submit">保存报告</button></form>
   </header>
   <main>
     {saved_block}
@@ -2180,8 +2238,8 @@ def run_report_page(exp_id: int, saved: str = Query("")):
       {"".join(photo_html) if photo_html else '<p>暂无附件。</p>'}
     </section>
     <section>
-      <h2>Markdown 报告</h2>
-      <pre>{_html_escape(markdown)}</pre>
+      <h2>实验报告</h2>
+      <div class="markdown-body">{report_html}</div>
     </section>
   </main>
 </body>
@@ -2190,11 +2248,14 @@ def run_report_page(exp_id: int, saved: str = Query("")):
 
 
 @app.post("/run/report/{exp_id}/save", response_class=HTMLResponse)
-async def run_report_save(exp_id: int):
+async def run_report_save(exp_id: int, return_to: str = Query("experiment")):
     if not db_ops.get_experiment(exp_id):
         raise HTTPException(404, "Experiment not found")
     result = db_ops.save_report(exp_id)
-    return _redirect_html(f"/run/report/{exp_id}?saved={quote(result['path'])}", "报告已保存")
+    return _redirect_html(
+        f"/run/report/{exp_id}?saved={quote(result['path'])}&return_to={quote(return_to)}",
+        "报告已保存",
+    )
 
 
 # ─────────────────────────────────────────────
