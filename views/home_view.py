@@ -61,12 +61,12 @@ def build_home_view(
     english = is_english()
     _timer_refs: dict[int, dict[str, ft.Control]] = {}
     _navigating = [False]
+    _experiment_signature = [()]
     status_text = ft.Text("", size=12, color=ft.Colors.ORANGE_700)
 
     # ── Load active experiments ─────────────────
 
-    def _load_experiments():
-        _timer_refs.clear()
+    def _list_visible_experiments():
         try:
             exps = data_provider.list_experiments(status="active")
             try:
@@ -74,7 +74,25 @@ def build_home_view(
             except Exception:
                 pass
         except Exception as e:
-            return [_error_card(str(e))]
+            return None, e
+        return exps, None
+
+    def _signature(exps) -> tuple:
+        return tuple(
+            sorted(
+                (int(_get(exp, "id")), str(_get(exp, "status", "")))
+                for exp in exps
+            )
+        )
+
+    def _load_experiments(exps=None):
+        _timer_refs.clear()
+        if exps is None:
+            exps, error = _list_visible_experiments()
+            if error is not None:
+                return [_error_card(str(error))]
+
+        _experiment_signature[0] = _signature(exps)
 
         if not exps:
             return [_empty_state()]
@@ -421,6 +439,7 @@ def build_home_view(
             self._mounted = False
 
         async def _refresh_loop(self) -> None:
+            list_refresh_ticks = 0
             while self._mounted:
                 try:
                     if not _navigating[0]:
@@ -430,6 +449,13 @@ def build_home_view(
                                 refs["row"].update()
                             except Exception:
                                 pass
+                        list_refresh_ticks += 1
+                        if list_refresh_ticks >= 3:
+                            list_refresh_ticks = 0
+                            exps, error = _list_visible_experiments()
+                            if error is None and _signature(exps) != _experiment_signature[0]:
+                                cards_column.controls = _load_experiments(exps)
+                                cards_column.update()
                 except Exception:
                     pass
                 await asyncio.sleep(1)
