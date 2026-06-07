@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 import json
+import os
 
 
 # ─────────────────────────────────────────────
@@ -212,7 +213,29 @@ class Step:
         return json.loads(self.description_overrides_json or "{}")
 
     def get_photo_paths(self) -> list[str]:
-        return json.loads(self.photo_paths or "[]")
+        return [item["path"] for item in self.get_attachments()]
+
+    def get_attachments(self) -> list[dict[str, str]]:
+        """Return normalized attachment metadata, including legacy path strings."""
+        try:
+            raw_items = json.loads(self.photo_paths or "[]")
+        except (TypeError, ValueError):
+            raw_items = []
+        attachments = []
+        for item in raw_items:
+            if isinstance(item, str):
+                path = item
+                name = os.path.basename(path.replace("\\", "/")) or path
+            elif isinstance(item, dict):
+                path = str(item.get("path", "")).strip()
+                name = str(item.get("name", "")).strip()
+                if not name:
+                    name = os.path.basename(path.replace("\\", "/")) or path
+            else:
+                continue
+            if path:
+                attachments.append({"path": path, "name": name})
+        return attachments
 
     @classmethod
     def from_row(cls, row: tuple) -> "Step":

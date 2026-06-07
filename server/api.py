@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional, Any
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -520,7 +520,8 @@ function renderSteps(items){
       <label>备注</label>
       <textarea data-step="${step.id}" data-key="${STEP_NOTES_KEY}" oninput="saveDraft(${step.id})" placeholder="记录本步骤的观察、异常、样品情况或临时想法">${esc(notesValue)}</textarea>
     </div>`;
-  const photos = (step.photo_paths || []).map((p,i) => `<a href="/photos/${esc(p)}" target="_blank">附件${i+1}</a>`).join("");
+  const attachments = step.attachments || (step.photo_paths || []).map((p,i) => ({path:p, name:`附件 ${i+1}`}));
+  const photos = attachments.map(a => `<a href="/photos/${esc(a.path)}" target="_blank">${esc(a.name)}</a>`).join("");
   const timerBlock = totalSeconds > 0 ? `
     <div class="timer" id="timer-box-${step.id}">
       <div class="small">本地计时 · 电脑端负责响铃</div>
@@ -548,6 +549,7 @@ function renderSteps(items){
         <input id="cam-${step.id}" name="file" type="file" accept="image/*" capture="environment" onchange="markFile(this)" />
         <input id="gal-${step.id}" name="file2" type="file" accept="image/*" onchange="markFile(this)" />
         <input id="any-${step.id}" name="file3" type="file" onchange="markFile(this)" />
+        <input id="name-${step.id}" name="attachment_name" type="text" placeholder="附件名称（默认原文件名）" />
         <button type="submit">上传</button>
         <span class="small" id="file-${step.id}">未选择</span>
       </form>
@@ -620,7 +622,8 @@ function renderSteps(items){
         <label>备注</label>
         <textarea data-step="${step.id}" data-key="${STEP_NOTES_KEY}" oninput="saveDraft(${step.id})" placeholder="记录本步骤的观察、异常、样品情况或临时想法">${esc(notesValue)}</textarea>
       </div>`;
-    const photos = (step.photo_paths || []).map((p,i) => `<a href="/photos/${esc(p)}" target="_blank">照片${i+1}</a>`).join("");
+    const attachments = step.attachments || (step.photo_paths || []).map((p,i) => ({path:p, name:`照片 ${i+1}`}));
+    const photos = attachments.map(a => `<a href="/photos/${esc(a.path)}" target="_blank">${esc(a.name)}</a>`).join("");
     const timerBlock = totalSeconds > 0 ? `
       <div class="timer" id="timer-box-${step.id}">
         <div class="small">本地计时 · 电脑端负责响铃</div>
@@ -646,6 +649,7 @@ function renderSteps(items){
           <label class="button secondary" for="gal-${step.id}">相册</label>
           <input id="cam-${step.id}" name="file" type="file" accept="image/*" capture="environment" onchange="markFile(this)" />
           <input id="gal-${step.id}" name="file2" type="file" accept="image/*" onchange="markFile(this)" />
+          <input id="name-${step.id}" name="attachment_name" type="text" placeholder="附件名称（默认原文件名）" />
           <button type="submit">上传</button>
           <span class="small" id="file-${step.id}">未选择</span>
         </form>
@@ -1158,7 +1162,11 @@ function syncCurrentAndNow(){
 function markFile(input){
   const form = input.closest("form");
   const stepId = form.getAttribute("onsubmit").match(/, (\\d+)\\)/)?.[1];
-  if(stepId && input.files && input.files.length) document.getElementById("file-"+stepId).textContent = input.files[0].name;
+  if(stepId && input.files && input.files.length) {
+    document.getElementById("file-"+stepId).textContent = input.files[0].name;
+    const nameInput = document.getElementById("name-"+stepId);
+    if(nameInput && !nameInput.value.trim()) nameInput.value = input.files[0].name;
+  }
 }
 
 async function uploadPhoto(event, stepId){
@@ -1168,6 +1176,8 @@ async function uploadPhoto(event, stepId){
   if(!file){ document.getElementById("file-"+stepId).textContent = "请先选择照片或文件"; return; }
   const fd = new FormData();
   fd.append("file", file);
+  const nameInput = document.getElementById("name-"+stepId);
+  fd.append("attachment_name", nameInput ? nameInput.value : file.name);
   try {
     const res = await fetch(`/api/photos/upload?step_id=${stepId}`, {method:"POST", body:fd});
     if(!res.ok) throw new Error(await res.text());
@@ -1326,6 +1336,7 @@ def _step_to_dict(step) -> dict:
         "values": step.get_values(),
         "description_overrides": step.get_description_overrides(),
         "photo_paths": step.get_photo_paths(),
+        "attachments": step.get_attachments(),
         "photo_pending": bool(step.photo_pending),
         "completed_at": step.completed_at,
     }
@@ -1498,6 +1509,7 @@ def _timer_state_to_dict(state) -> dict:
 async def upload_photo(
     step_id: int = Query(...),
     file: UploadFile = File(...),
+    attachment_name: str = Form(""),
 ):
     step = db_ops.get_step(step_id)
     if not step:
@@ -1509,7 +1521,7 @@ async def upload_photo(
     sub_dir = os.path.join(photos_dir, str(step.experiment_id))
     os.makedirs(sub_dir, exist_ok=True)
 
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     ext = os.path.splitext(file.filename or "photo.jpg")[1] or ".jpg"
     filename = f"step{step_id}_{ts}{ext}"
     filepath = os.path.join(sub_dir, filename)
@@ -1525,9 +1537,10 @@ async def upload_photo(
 
     # Relative path for URL construction
     rel_path = f"{step.experiment_id}/{filename}"
-    db_ops.add_photo_to_step(step_id, rel_path)
+    display_name = attachment_name.strip() or os.path.basename(file.filename or filename)
+    db_ops.add_photo_to_step(step_id, rel_path, display_name)
 
-    return {"path": rel_path, "url": f"/photos/{rel_path}"}
+    return {"path": rel_path, "name": display_name, "url": f"/photos/{rel_path}"}
 
 
 @app.get("/web/upload/{step_id}", response_class=HTMLResponse)
@@ -1537,6 +1550,23 @@ def web_upload_form(step_id: int):
         raise HTTPException(404, "Step not found")
     _write_eln_return_target(step.experiment_id, step_id)
     app_url = _eln_step_url(step.experiment_id, step_id)
+    existing_attachments = []
+    for item in step.get_attachments():
+        existing_attachments.append(f"""
+        <form class="rename-row" method="post" action="/web/upload/{step_id}/rename">
+          <input type="hidden" name="attachment_path" value="{_html_escape(item['path'])}" />
+          <input type="text" name="attachment_name" value="{_html_escape(item['name'])}"
+                 aria-label="附件名称" maxlength="240" />
+          <button type="submit">保存名称</button>
+        </form>
+        """)
+    existing_html = (
+        '<section class="existing"><h2>已有附件</h2>'
+        '<p class="muted">名称只用于显示和报告，不会改动物理文件。</p>'
+        + "".join(existing_attachments)
+        + "</section>"
+        if existing_attachments else ""
+    )
     return _html_response(f"""
 <!doctype html>
 <html lang="zh-CN">
@@ -1555,8 +1585,14 @@ def web_upload_form(step_id: int):
     .actions {{ display: flex; gap: 12px; align-items: center; margin-bottom: 28px; flex-wrap: wrap; }}
     .upload-actions {{ display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }}
     input[type=file] {{ position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }}
+    input[type=text] {{ box-sizing:border-box; width:100%; border:1px solid #ccc; border-radius:8px; padding:10px 12px; }}
     .filename {{ min-height: 24px; color: #444; }}
     .muted {{ color: #666; }}
+    .name-field {{ display:grid; gap:6px; }}
+    .existing {{ margin-top:36px; padding-top:20px; border-top:1px solid #ddd; }}
+    .existing h2 {{ font-size:18px; }}
+    .rename-row {{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; margin:10px 0; }}
+    .rename-row button {{ padding:9px 12px; }}
   </style>
 </head>
 <body>
@@ -1578,8 +1614,14 @@ def web_upload_form(step_id: int):
       <input id="galleryFile" name="file" type="file" accept="image/*" />
       <input id="anyFile" name="file" type="file" />
       <div id="filename" class="filename">尚未选择照片或文件</div>
+      <label class="name-field">
+        <span>附件名称</span>
+        <input id="attachmentName" name="attachment_name" type="text" maxlength="240"
+               placeholder="默认使用原文件名，也可以改成容易识别的名称" />
+      </label>
       <button type="submit">上传</button>
     </form>
+    {existing_html}
   </main>
   <script>
     const cameraFile = document.getElementById("cameraFile");
@@ -1587,9 +1629,11 @@ def web_upload_form(step_id: int):
     const anyFile = document.getElementById("anyFile");
     const uploadForm = document.querySelector("form");
     const filename = document.getElementById("filename");
+    const attachmentName = document.getElementById("attachmentName");
     function showName(input) {{
       if (input.files && input.files.length) {{
         filename.textContent = "已选择：" + input.files[0].name;
+        if (!attachmentName.value.trim()) attachmentName.value = input.files[0].name;
         if (input === cameraFile) galleryFile.value = "";
         if (input === cameraFile) anyFile.value = "";
         if (input === galleryFile) cameraFile.value = "";
@@ -1746,13 +1790,21 @@ async def web_edit_step_save(step_id: int, request: Request):
 
 
 @app.post("/web/upload/{step_id}", response_class=HTMLResponse)
-async def web_upload_photo(step_id: int, file: UploadFile = File(...)):
-    result = await upload_photo(step_id=step_id, file=file)
+async def web_upload_photo(
+    step_id: int,
+    file: UploadFile = File(...),
+    attachment_name: str = Form(""),
+):
+    result = await upload_photo(
+        step_id=step_id,
+        file=file,
+        attachment_name=attachment_name,
+    )
     step = db_ops.get_step(step_id)
     if step:
         _write_eln_return_target(step.experiment_id, step_id)
     app_url = _eln_step_url(step.experiment_id, step_id) if step else _web_base_url()
-    preview_html = _attachment_preview_html(result["path"], "上传文件")
+    preview_html = _attachment_preview_html(result["path"], result.get("name", "上传文件"))
     return _html_response(f"""
 <!doctype html>
 <html lang="zh-CN">
@@ -1779,6 +1831,21 @@ async def web_upload_photo(step_id: int, file: UploadFile = File(...)):
 </body>
 </html>
 """)
+
+
+@app.post("/web/upload/{step_id}/rename")
+async def web_rename_attachment(
+    step_id: int,
+    attachment_path: str = Form(...),
+    attachment_name: str = Form(...),
+):
+    if not db_ops.get_step(step_id):
+        raise HTTPException(404, "Step not found")
+    try:
+        db_ops.rename_attachment(step_id, attachment_path, attachment_name)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return RedirectResponse(f"/web/upload/{step_id}", status_code=303)
 
 
 def _is_image_attachment(path: str) -> bool:
@@ -2185,12 +2252,14 @@ def run_report_page(
     report_html = _render_markdown_html(markdown)
     photo_html = []
     for step in db_ops.get_steps(exp_id):
-        for i, path in enumerate(step.get_photo_paths(), 1):
-            label = f"Step {step.step_index + 1} · {step.title} · 附件 {i}"
+        for item in step.get_attachments():
+            path = item["path"]
+            label = item["name"]
             photo_html.append(
                 "<figure>"
                 f"{_attachment_preview_html(path, label)}"
-                f"<figcaption>{_html_escape(label)}</figcaption>"
+                f"<figcaption>Step {step.step_index + 1} · "
+                f"{_html_escape(step.title)} · {_html_escape(label)}</figcaption>"
                 "</figure>"
             )
     saved_block = f'<p class="saved">已保存：{_html_escape(saved)}</p>' if saved else ""

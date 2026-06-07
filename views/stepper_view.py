@@ -446,8 +446,11 @@ def _dict_to_step(d: dict) -> Step:
         description_overrides_json=_json.dumps(d.get("description_overrides", {}), ensure_ascii=False)
                                    if isinstance(d.get("description_overrides"), dict)
                                    else d.get("description_overrides_json", "{}"),
-        photo_paths=_json.dumps(d.get("photo_paths", []), ensure_ascii=False)
-                    if isinstance(d.get("photo_paths"), list) else d.get("photo_paths", "[]"),
+        photo_paths=_json.dumps(
+            d.get("attachments") or d.get("photo_paths", []),
+            ensure_ascii=False,
+        ) if isinstance(d.get("attachments") or d.get("photo_paths", []), list)
+        else d.get("photo_paths", "[]"),
         photo_pending=bool(d.get("photo_pending", False)),
         completed_at=d.get("completed_at"),
     )

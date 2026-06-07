@@ -179,17 +179,19 @@ def _render_step(step: Step, timer_events: list[dict] | None = None) -> list[str
         lines.append("")
 
     # Attachments / Photos
-    photo_paths = step.get_photo_paths()
-    if photo_paths:
+    attachments = step.get_attachments()
+    if attachments:
         lines.append("**附件 / 照片**：")
         lines.append("")
-        for i, path in enumerate(photo_paths, 1):
-            lines.append(f"- 附件 {i}：`{path}`")
+        for item in attachments:
+            path = item["path"]
+            name = item["name"]
+            lines.append(f"- **{name}**：`{path}`")
             lines.append("")
             if _is_image_attachment(path):
-                lines.append(f"![附件 {i}](../photos/{path})")
+                lines.append(f"![{name}](../photos/{path})")
             else:
-                lines.append(f"[打开附件 {i}](../photos/{path})")
+                lines.append(f"[打开 {name}](../photos/{path})")
             lines.append("")
         lines.append("")
     elif step.has_camera and step.photo_pending:
@@ -206,7 +208,7 @@ def _render_step(step: Step, timer_events: list[dict] | None = None) -> list[str
 
 def _is_image_attachment(path: str) -> bool:
     return os.path.splitext(path.lower())[1] in {
-        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg"
     }
 
 

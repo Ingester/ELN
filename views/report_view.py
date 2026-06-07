@@ -84,8 +84,15 @@ def build_report_view(
         if url:
             _open_attachment(url)
 
-    def _photo_paths_from_step(step) -> list[str]:
+    def _attachments_from_step(step) -> list[dict[str, str]]:
         if isinstance(step, dict):
+            attachments = step.get("attachments")
+            if isinstance(attachments, list):
+                return [
+                    {"path": str(item.get("path", "")), "name": str(item.get("name", ""))}
+                    for item in attachments
+                    if isinstance(item, dict) and item.get("path")
+                ]
             paths = step.get("photo_paths", [])
             if isinstance(paths, str):
                 try:
@@ -93,8 +100,14 @@ def build_report_view(
                     paths = json.loads(paths or "[]")
                 except Exception:
                     paths = []
-            return [str(p) for p in paths if p]
-        return [str(p) for p in step.get_photo_paths() if p]
+            return [
+                {
+                    "path": str(p),
+                    "name": os.path.basename(str(p).replace("\\", "/")) or str(p),
+                }
+                for p in paths if p
+            ]
+        return step.get_attachments()
 
     def _step_label(step) -> str:
         if isinstance(step, dict):
@@ -109,11 +122,13 @@ def build_report_view(
     def _build_photo_gallery() -> ft.Control:
         rows: list[ft.Control] = []
         for step in data_provider.get_steps(experiment_id):
-            paths = _photo_paths_from_step(step)
-            if not paths:
+            attachments = _attachments_from_step(step)
+            if not attachments:
                 continue
             thumbs = []
-            for i, path in enumerate(paths, 1):
+            for item in attachments:
+                path = item["path"]
+                name = item["name"]
                 src = _photo_src(path)
                 if _is_image_attachment(path):
                     body = ft.Image(
@@ -140,7 +155,8 @@ def build_report_view(
                 thumbs.append(ft.Container(
                     content=ft.Column([
                         body,
-                        ft.Text(f"附件 {i}", size=12, color=ft.Colors.GREY_700),
+                        ft.Text(name, size=12, color=ft.Colors.GREY_700,
+                                weight=ft.FontWeight.BOLD),
                         ft.Text(path, size=11, color=ft.Colors.GREY_500, selectable=True),
                         ft.TextButton(
                             "打开 / 下载",

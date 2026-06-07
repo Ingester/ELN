@@ -249,7 +249,7 @@ class StepCard(ft.Container):
         self._camera_widget = CameraWidget(
             step_id=step.id,
             experiment_id=step.experiment_id,
-            existing_paths=step.get_photo_paths(),
+            existing_paths=step.get_attachments(),
             camera_required=step.camera_required if step.has_camera else True,
             on_photo_added=self._on_photo_added,
             on_skip=self._on_photo_skip if step.has_camera else None,

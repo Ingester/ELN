@@ -367,13 +367,44 @@ def complete_step(step_id: int) -> Optional[Step]:
     return update_step(step_id, completed_at=_now())
 
 
-def add_photo_to_step(step_id: int, photo_path: str) -> Optional[Step]:
+def _attachment_name(name: str, path: str) -> str:
+    cleaned = " ".join(str(name or "").strip().split())
+    return cleaned[:240] or os.path.basename(path.replace("\\", "/")) or path
+
+
+def add_photo_to_step(
+    step_id: int,
+    photo_path: str,
+    attachment_name: str = "",
+) -> Optional[Step]:
     step = get_step(step_id)
     if step is None:
         return None
-    paths = step.get_photo_paths()
-    paths.append(photo_path)
-    return update_step(step_id, photo_paths=json.dumps(paths), photo_pending=0)
+    attachments = step.get_attachments()
+    attachments.append({
+        "path": photo_path,
+        "name": _attachment_name(attachment_name, photo_path),
+    })
+    return update_step(
+        step_id,
+        photo_paths=json.dumps(attachments, ensure_ascii=False),
+        photo_pending=0,
+    )
+
+
+def rename_attachment(step_id: int, photo_path: str, attachment_name: str) -> Optional[Step]:
+    step = get_step(step_id)
+    if step is None:
+        return None
+    attachments = step.get_attachments()
+    for item in attachments:
+        if item["path"] == photo_path:
+            item["name"] = _attachment_name(attachment_name, photo_path)
+            return update_step(
+                step_id,
+                photo_paths=json.dumps(attachments, ensure_ascii=False),
+            )
+    raise ValueError("Attachment not found")
 
 
 def upload_photo(step_id: int, file_path: str) -> dict[str, str]:
@@ -396,8 +427,9 @@ def upload_photo(step_id: int, file_path: str) -> dict[str, str]:
     shutil.copy2(file_path, dest)
 
     rel_path = f"{step.experiment_id}/{filename}"
-    add_photo_to_step(step_id, rel_path)
-    return {"path": rel_path, "url": photo_url(rel_path)}
+    display_name = os.path.basename(file_path)
+    add_photo_to_step(step_id, rel_path, display_name)
+    return {"path": rel_path, "name": display_name, "url": photo_url(rel_path)}
 
 
 def upload_photo_bytes(step_id: int, filename: str, data: bytes) -> dict[str, str]:
@@ -420,8 +452,9 @@ def upload_photo_bytes(step_id: int, filename: str, data: bytes) -> dict[str, st
         f.write(data)
 
     rel_path = f"{step.experiment_id}/{out_name}"
-    add_photo_to_step(step_id, rel_path)
-    return {"path": rel_path, "url": photo_url(rel_path)}
+    display_name = os.path.basename(filename or out_name)
+    add_photo_to_step(step_id, rel_path, display_name)
+    return {"path": rel_path, "name": display_name, "url": photo_url(rel_path)}
 
 
 def photo_url(rel_path: str) -> str:

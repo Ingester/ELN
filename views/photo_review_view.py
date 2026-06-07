@@ -56,7 +56,7 @@ def build_photo_review_view(
             step_id = step_data["id"]
             step_idx = step_data["step_index"]
             title = step_data["title"]
-            existing = step_data.get("photo_paths", [])
+            existing = step_data.get("attachments") or step_data.get("photo_paths", [])
             if isinstance(existing, str):
                 import json
                 existing = json.loads(existing)
@@ -64,7 +64,7 @@ def build_photo_review_view(
             step_id = step_data.id
             step_idx = step_data.step_index
             title = step_data.title
-            existing = step_data.get_photo_paths()
+            existing = step_data.get_attachments()
 
         def _on_photo_added(rel_path: str):
             _load()  # Refresh list

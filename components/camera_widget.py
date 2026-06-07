@@ -52,7 +52,8 @@ class CameraWidget(ft.Column):
         super().__init__(spacing=8)
         self.step_id = step_id
         self.experiment_id = experiment_id
-        self.existing_paths = list(existing_paths)
+        self.existing_attachments = self._normalize_attachments(existing_paths)
+        self.existing_paths = [item["path"] for item in self.existing_attachments]
         self.camera_required = camera_required
         self.on_photo_added = on_photo_added
         self.on_skip = on_skip
@@ -156,10 +157,14 @@ class CameraWidget(ft.Column):
             return
         try:
             step = self.data_provider.get_step(self.step_id)
-            paths = step.get_photo_paths() if hasattr(step, "get_photo_paths") else step.get("photo_paths", [])
-            self.existing_paths = list(paths or [])
+            if hasattr(step, "get_attachments"):
+                attachments = step.get_attachments()
+            else:
+                attachments = step.get("attachments") or step.get("photo_paths", [])
+            self.existing_attachments = self._normalize_attachments(attachments)
+            self.existing_paths = [item["path"] for item in self.existing_attachments]
             self._refresh_photo_list()
-            self._status.value = f"已刷新，当前 {len(self.existing_paths)} 张照片"
+            self._status.value = f"已刷新，当前 {len(self.existing_paths)} 个附件"
             if self.existing_paths and self.on_photo_added:
                 self.on_photo_added(self.existing_paths[-1])
         except Exception as ex:
@@ -183,6 +188,7 @@ class CameraWidget(ft.Column):
         self.update()
 
         try:
+            result = {}
             if self.data_provider and file_bytes:
                 result = self.data_provider.upload_photo_bytes(
                     self.step_id,
@@ -196,6 +202,8 @@ class CameraWidget(ft.Column):
             else:
                 rel_path = file_path
 
+            display_name = result.get("name") or getattr(file, "name", "") or os.path.basename(rel_path)
+            self.existing_attachments.append({"path": rel_path, "name": display_name})
             self.existing_paths.append(rel_path)
             self._status.value = "上传成功"
             self._refresh_photo_list()
@@ -218,7 +226,9 @@ class CameraWidget(ft.Column):
 
     def _refresh_photo_list(self) -> None:
         self._photo_list.controls.clear()
-        for i, path in enumerate(self.existing_paths, 1):
+        for item in self.existing_attachments:
+            path = item["path"]
+            name = item["name"]
             if self._web_mode:
                 url = f"{self._api_base_url()}/photos/{path}"
             elif self.data_provider:
@@ -228,7 +238,7 @@ class CameraWidget(ft.Column):
             self._photo_list.controls.append(
                 ft.Row([
                     ft.Icon(ft.Icons.ATTACH_FILE, color=ft.Colors.ORANGE_400),
-                    ft.Text(f"附件 {i}", size=13),
+                    ft.Text(name, size=13, expand=True),
                     ft.TextButton(
                         "查看",
                         on_click=lambda _, u=url: self._view_photo(u),
@@ -236,6 +246,24 @@ class CameraWidget(ft.Column):
                     ),
                 ], spacing=6)
             )
+
+    @staticmethod
+    def _normalize_attachments(items) -> list[dict[str, str]]:
+        normalized = []
+        for item in items or []:
+            if isinstance(item, dict):
+                path = str(item.get("path", "")).strip()
+                name = str(item.get("name", "")).strip()
+            else:
+                path = str(item).strip()
+                name = ""
+            if not path:
+                continue
+            normalized.append({
+                "path": path,
+                "name": name or os.path.basename(path.replace("\\", "/")) or path,
+            })
+        return normalized
 
     def _view_photo(self, url: str) -> None:
         self.page.launch_url(url)
