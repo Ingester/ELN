@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 import json
 import os
+import re
 
 
 # ─────────────────────────────────────────────
@@ -68,7 +69,7 @@ class ProtocolStep:
         timer_seconds = d.get("timer_seconds", 0)
         if timer_seconds is None:
             timer_seconds = 0
-        return cls(
+        step = cls(
             title=d.get("title", ""),
             description=d.get("description", ""),
             timer_seconds=int(timer_seconds),
@@ -76,6 +77,28 @@ class ProtocolStep:
             camera_required=bool(d.get("camera_required", False)),
             fields=[ProtocolField.from_dict(f) for f in d.get("fields", [])],
         )
+        step.ensure_unique_field_keys()
+        return step
+
+    def ensure_unique_field_keys(self) -> None:
+        used: set[str] = set()
+        for index, protocol_field in enumerate(self.fields, 1):
+            base = str(protocol_field.key or "").strip()
+            if not base:
+                base = re.sub(
+                    r"[^a-z0-9]+",
+                    "_",
+                    str(protocol_field.label or "").lower().replace("µ", "u"),
+                ).strip("_")
+            if not base:
+                base = f"field_{index}"
+            candidate = base
+            suffix = 2
+            while candidate in used:
+                candidate = f"{base}_{suffix}"
+                suffix += 1
+            protocol_field.key = candidate
+            used.add(candidate)
 
     def to_dict(self) -> dict:
         return {

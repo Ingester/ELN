@@ -355,6 +355,26 @@ function mergedValues(step){
   return vals;
 }
 
+function normalizedFields(step){
+  const used = new Set();
+  return (step.fields || []).map((field, index) => {
+    let base = String(field.key || "").trim();
+    if(!base){
+      base = String(field.label || "")
+        .toLowerCase()
+        .replace(/µ/g, "u")
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+    }
+    if(!base) base = `field_${index + 1}`;
+    let key = base;
+    let suffix = 2;
+    while(used.has(key)) key = `${base}_${suffix++}`;
+    used.add(key);
+    return {...field, key};
+  });
+}
+
 function mergedOverrides(step){
   let vals = {...(step.description_overrides || {})};
   try { vals = {...vals, ...JSON.parse(localStorage.getItem(descKey(step.id)) || "{}")}; } catch {}
@@ -506,7 +526,7 @@ function renderSteps(items){
   const isLast = idx >= items.length - 1;
   const card = document.createElement("article");
   card.className = "card";
-  const fields = (step.fields || []).map(f => {
+  const fields = normalizedFields(step).map(f => {
     const v = vals[f.key] ?? f.default ?? "";
     if(f.type === "dropdown"){
       const opts = (f.options || []).map(o => `<option value="${esc(o)}" ${o==v?"selected":""}>${esc(o)}</option>`).join("");
@@ -608,7 +628,7 @@ function renderSteps(items){
     const totalSeconds = mergedTimerSeconds(step);
     const card = document.createElement("article");
     card.className = "card";
-    const fields = (step.fields || []).map(f => {
+    const fields = normalizedFields(step).map(f => {
       const v = vals[f.key] ?? f.default ?? "";
       if(f.type === "dropdown"){
         const opts = (f.options || []).map(o => `<option value="${esc(o)}" ${o==v?"selected":""}>${esc(o)}</option>`).join("");
@@ -674,7 +694,10 @@ function renderSteps(items){
 
 function collectValues(stepId){
   const vals = {};
-  document.querySelectorAll(`[data-step="${stepId}"]`).forEach(el => vals[el.dataset.key] = el.value || "");
+  document.querySelectorAll(`[data-step="${stepId}"]`).forEach(el => {
+    const key = String(el.dataset.key || "").trim();
+    if(key) vals[key] = el.value || "";
+  });
   return vals;
 }
 function saveDraft(stepId){ localStorage.setItem(draftKey(stepId), JSON.stringify(collectValues(stepId))); }
@@ -1093,7 +1116,7 @@ function saveAndSync(stepId){
 
 function requiredErrors(step){
   const vals = collectValues(step.id);
-  return (step.fields || []).filter(f => f.required && !String(vals[f.key] || "").trim()).map(f => f.label);
+  return normalizedFields(step).filter(f => f.required && !String(vals[f.key] || "").trim()).map(f => f.label);
 }
 
 function completeStep(stepId){

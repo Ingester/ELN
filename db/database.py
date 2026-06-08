@@ -14,7 +14,7 @@ from contextlib import contextmanager
 
 from db.models import (
     Experiment, Step, TimerRecord, Protocol, Box, BoxSlot, StorageItem,
-    ProtocolDefinition, ExperimentStatus,
+    ProtocolDefinition, ProtocolField, ProtocolStep, ExperimentStatus,
 )
 
 
@@ -217,6 +217,52 @@ CREATE INDEX IF NOT EXISTS idx_storage_experiment ON storage_items(experiment_id
 def _create_tables() -> None:
     with db_conn() as conn:
         conn.executescript(_SCHEMA)
+        _normalize_existing_step_field_keys(conn)
+
+
+def _normalize_existing_step_field_keys(conn: sqlite3.Connection) -> None:
+    """Repair legacy steps whose field keys are empty or duplicated."""
+    rows = conn.execute(
+        "SELECT id, fields_json, values_json FROM steps"
+    ).fetchall()
+    for row in rows:
+        try:
+            raw_fields = json.loads(row["fields_json"] or "[]")
+            old_values = json.loads(row["values_json"] or "{}")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(raw_fields, list) or not isinstance(old_values, dict):
+            continue
+
+        fields = [ProtocolField.from_dict(item) for item in raw_fields if isinstance(item, dict)]
+        old_keys = [field.key for field in fields]
+        step_def = ProtocolStep(title="", description="", fields=fields)
+        step_def.ensure_unique_field_keys()
+        new_keys = [field.key for field in fields]
+        if old_keys == new_keys:
+            continue
+
+        last_index_by_key = {
+            key: index
+            for index, key in enumerate(old_keys)
+        }
+        new_values = {
+            key: value
+            for key, value in old_values.items()
+            if key not in set(old_keys)
+        }
+        for index, (old_key, new_key) in enumerate(zip(old_keys, new_keys)):
+            if old_key in old_values and last_index_by_key.get(old_key) == index:
+                new_values[new_key] = old_values[old_key]
+
+        conn.execute(
+            "UPDATE steps SET fields_json=?, values_json=? WHERE id=?",
+            (
+                json.dumps([field.to_dict() for field in fields], ensure_ascii=False),
+                json.dumps(new_values, ensure_ascii=False),
+                row["id"],
+            ),
+        )
 
 
 # ─────────────────────────────────────────────
@@ -237,6 +283,7 @@ def create_experiment(name: str, protocol: ProtocolDefinition,
         exp_id = cur.lastrowid
 
         for idx, step_def in enumerate(protocol.steps):
+            step_def.ensure_unique_field_keys()
             conn.execute(
                 """INSERT INTO steps
                    (experiment_id, step_index, title, description, timer_seconds,
