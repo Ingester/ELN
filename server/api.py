@@ -548,13 +548,13 @@ function renderSteps(items){
       <div class="timer-display" id="timer-display-${step.id}">${fmt(totalSeconds)}</div>
       <div class="field timer-edit">
         <label>计时器</label>
-        <input type="number" min="0" step="0.1" value="${timerMinutes(totalSeconds)}" onchange="saveTimerOverride(${step.experiment_id}, ${step.id}, this.value)" />
+        <input type="number" min="0" step="0.1" value="${timerMinutes(totalSeconds)}" onchange="saveTimerOverride(${step.experiment_id}, ${step.id}, this.value)" ${step.completed_at ? "disabled" : ""} />
         <span class="small">分钟</span>
       </div>
       <div class="actions">
-        <button onclick="startLocalTimer(${step.experiment_id}, ${step.id}, ${totalSeconds})">开始</button>
-        <button class="secondary" onclick="pauseLocalTimer(${step.experiment_id}, ${step.id})">暂停</button>
-        <button class="secondary" onclick="resetLocalTimer(${step.experiment_id}, ${step.id}, ${totalSeconds})">重置</button>
+        <button onclick="startLocalTimer(${step.experiment_id}, ${step.id}, ${totalSeconds})" ${step.completed_at ? "disabled" : ""}>开始</button>
+        <button class="secondary" onclick="pauseLocalTimer(${step.experiment_id}, ${step.id})" ${step.completed_at ? "disabled" : ""}>暂停</button>
+        <button class="secondary" onclick="resetLocalTimer(${step.experiment_id}, ${step.id}, ${totalSeconds})" ${step.completed_at ? "disabled" : ""}>重置</button>
       </div>
       <div class="status" id="timer-status-${step.id}"></div>
     </div>` : "";
@@ -650,13 +650,13 @@ function renderSteps(items){
         <div class="timer-display" id="timer-display-${step.id}">${fmt(totalSeconds)}</div>
         <div class="field timer-edit">
           <label>计时器</label>
-          <input type="number" min="0" step="0.1" value="${timerMinutes(totalSeconds)}" onchange="saveTimerOverride(${step.experiment_id}, ${step.id}, this.value)" />
+          <input type="number" min="0" step="0.1" value="${timerMinutes(totalSeconds)}" onchange="saveTimerOverride(${step.experiment_id}, ${step.id}, this.value)" ${step.completed_at ? "disabled" : ""} />
           <span class="small">分钟</span>
         </div>
         <div class="actions">
-          <button onclick="startLocalTimer(${step.experiment_id}, ${step.id}, ${totalSeconds})">开始</button>
-          <button class="secondary" onclick="pauseLocalTimer(${step.experiment_id}, ${step.id})">暂停</button>
-          <button class="secondary" onclick="resetLocalTimer(${step.experiment_id}, ${step.id}, ${totalSeconds})">重置</button>
+          <button onclick="startLocalTimer(${step.experiment_id}, ${step.id}, ${totalSeconds})" ${step.completed_at ? "disabled" : ""}>开始</button>
+          <button class="secondary" onclick="pauseLocalTimer(${step.experiment_id}, ${step.id})" ${step.completed_at ? "disabled" : ""}>暂停</button>
+          <button class="secondary" onclick="resetLocalTimer(${step.experiment_id}, ${step.id}, ${totalSeconds})" ${step.completed_at ? "disabled" : ""}>重置</button>
         </div>
         <div class="status" id="timer-status-${step.id}"></div>
       </div>` : "";
@@ -904,15 +904,25 @@ function serverTimerToLocal(record){
       updatedAt:Date.now()
     };
   }
+  if(record.status === "confirmed"){
+    return {
+      status:"confirmed",
+      total,
+      remaining:remainingAtServer,
+      pausedRemaining:remainingAtServer,
+      overtime:overtimeAtServer,
+      startedAt:null,
+      updatedAt:Date.now()
+    };
+  }
   return {status:"idle", total, remaining:total, pausedRemaining:total, startedAt:null, updatedAt:Date.now()};
 }
 
 async function restoreTimersFromServer(expId){
   try {
-    const active = await api("/api/timers/active");
+    const active = await api(`/api/timers/experiment/${expId}`);
     const timers = getTimers();
     for(const record of active){
-      if(String(record.experiment_id) !== String(expId)) continue;
       timers[record.step_id] = serverTimerToLocal(record);
       timerLastSync[record.step_id] = Date.now();
     }
@@ -1099,7 +1109,9 @@ function refreshTimers(){
     } else {
       display.textContent = fmt(current.remaining ?? totalSeconds);
       box.classList.remove("over");
-      if(text) text.textContent = current.status === "running" ? "计时中" : (current.status === "paused" ? "已暂停" : "未开始");
+      if(text) text.textContent = current.status === "running"
+        ? "计时中"
+        : (current.status === "paused" ? "已暂停" : (current.status === "confirmed" ? "已停止" : "未开始"));
     }
     if((current.status === "running" || current.status === "overtime") && Date.now() - (timerLastSync[step.id] || 0) > 3000){
       queueComputerTimerState(step.experiment_id, step.id, current);
@@ -1123,6 +1135,21 @@ function completeStep(stepId){
   const step = steps.find(s => s.id === stepId);
   const errs = requiredErrors(step);
   if(errs.length){ status(stepId, "必填未填：" + errs.join("、")); return; }
+  const timers = getTimers();
+  const total = mergedTimerSeconds(step);
+  if(total > 0){
+    const current = timerState(stepId, total);
+    const remaining = Math.max(0, current.remaining ?? current.pausedRemaining ?? 0);
+    timers[stepId] = {
+      ...current,
+      status:"confirmed",
+      remaining,
+      pausedRemaining:remaining,
+      startedAt:null,
+      updatedAt:Date.now()
+    };
+    setTimers(timers);
+  }
   saveDraft(stepId);
   enqueue({type:"patchStep", stepId, payload: patchPayload(stepId)});
   enqueue({type:"completeStep", stepId});
@@ -1327,8 +1354,40 @@ def update_step(step_id: int, body: StepUpdate):
 
 @app.post("/api/steps/{step_id}/complete")
 def complete_step(step_id: int):
-    if not db_ops.get_step(step_id):
+    step = db_ops.get_step(step_id)
+    if not step:
         raise HTTPException(404, "Step not found")
+    if step.effective_timer_seconds > 0:
+        from timer_manager import get_timer_manager
+
+        tm = get_timer_manager()
+        tm.start()
+        state = tm.get_state(step.experiment_id, step.id)
+        if state is None:
+            persisted = db_ops.get_timer(step.experiment_id, step.id)
+            if persisted:
+                tm.create_or_restore(
+                    step.experiment_id,
+                    step.id,
+                    persisted.total_seconds,
+                    remaining_seconds=persisted.remaining_seconds,
+                    overtime_seconds=persisted.overtime_seconds,
+                    status=persisted.status,
+                    timer_finished_at=persisted.timer_finished_at,
+                    started_at=persisted.started_at,
+                )
+            else:
+                tm.create_or_restore(
+                    step.experiment_id,
+                    step.id,
+                    step.effective_timer_seconds,
+                )
+        tm.complete_timer(step.experiment_id, step.id)
+        try:
+            from notifications import stop_alert_sound
+            stop_alert_sound()
+        except Exception:
+            pass
     step = db_ops.complete_step(step_id)
     return _step_to_dict(step)
 
@@ -1369,6 +1428,13 @@ def _step_to_dict(step) -> dict:
 # Timers
 # ─────────────────────────────────────────────
 
+@app.get("/api/timers/experiment/{exp_id}")
+def list_experiment_timers(exp_id: int):
+    if not db_ops.get_experiment(exp_id):
+        raise HTTPException(404, "Experiment not found")
+    return [_timer_to_dict(timer) for timer in db_ops.list_experiment_timers(exp_id)]
+
+
 @app.get("/api/timers/{exp_id}/{step_id}")
 def get_timer(exp_id: int, step_id: int):
     timer = db_ops.get_timer(exp_id, step_id)
@@ -1406,6 +1472,8 @@ def _require_timer_step(exp_id: int, step_id: int):
     step = db_ops.get_step(step_id)
     if not step or step.experiment_id != exp_id:
         raise HTTPException(404, "Step not found for experiment")
+    if step.completed_at:
+        raise HTTPException(409, "Completed step timer cannot be restarted")
     if step.effective_timer_seconds <= 0:
         raise HTTPException(400, "Step has no timer")
     return step
@@ -1419,7 +1487,20 @@ def _ensure_managed_timer(exp_id: int, step_id: int):
     tm.start()
     state = tm.get_state(exp_id, step_id)
     if state is None:
-        state = tm.create_or_restore(exp_id, step_id, step.effective_timer_seconds)
+        persisted = db_ops.get_timer(exp_id, step_id)
+        if persisted:
+            state = tm.create_or_restore(
+                exp_id,
+                step_id,
+                persisted.total_seconds,
+                remaining_seconds=persisted.remaining_seconds,
+                overtime_seconds=persisted.overtime_seconds,
+                status=persisted.status,
+                timer_finished_at=persisted.timer_finished_at,
+                started_at=persisted.started_at,
+            )
+        else:
+            state = tm.create_or_restore(exp_id, step_id, step.effective_timer_seconds)
     elif (
         state.total_seconds != step.effective_timer_seconds
         and state.status not in ("overtime", "confirmed")
@@ -1437,11 +1518,7 @@ def start_managed_timer(exp_id: int, step_id: int):
 
 @app.post("/api/timers/{exp_id}/{step_id}/sync")
 def sync_managed_timer(exp_id: int, step_id: int, body: TimerSync):
-    _require_timer_step(exp_id, step_id)
-    from timer_manager import get_timer_manager
-
-    tm = get_timer_manager()
-    tm.start()
+    tm, _ = _ensure_managed_timer(exp_id, step_id)
     state = tm.sync_timer(
         exp_id,
         step_id,

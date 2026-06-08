@@ -231,6 +231,13 @@ class TimerManager:
             overtime = max(overtime, abs(int(remaining_seconds)))
         with self._state_lock:
             previous = self._timers.get(tid)
+            if (
+                previous is not None
+                and previous.status in ("idle", "paused", "confirmed")
+                and normalized_status in ("running", "overtime")
+                and action in ("sync", "tick")
+            ):
+                return previous.clone()
             should_log_action = bool(action and action not in ("sync", "tick"))
             if should_log_action and previous is not None:
                 self._log_event_locked(previous, action, elapsed_seconds=elapsed_seconds)
@@ -250,6 +257,21 @@ class TimerManager:
                 self._log_event_locked(state, action, elapsed_seconds=elapsed_seconds)
         self._persist(tid)
         return state.clone()
+
+    def complete_timer(self, experiment_id: int, step_id: int) -> Optional[TimerState]:
+        """Freeze any timer state when its experiment step is completed."""
+        tid = f"{experiment_id}_{step_id}"
+        with self._state_lock:
+            state = self._timers.get(tid)
+            if state is None:
+                return None
+            if state.status != "confirmed":
+                self._log_event_locked(state, "complete")
+                state.status = "confirmed"
+                state.started_at = None
+        self._persist(tid)
+        self._write_overtime_to_step(tid)
+        return self._timers.get(tid, None) and self._timers[tid].clone()
 
     def confirm_overtime(self, experiment_id: int, step_id: int) -> Optional[TimerState]:
         """User clicks 'Confirm, next step' — freeze overtime count and mark confirmed."""

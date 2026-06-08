@@ -587,6 +587,18 @@ def list_active_timers() -> list[TimerRecord]:
     return [TimerRecord.from_row(tuple(r)) for r in rows]
 
 
+def list_experiment_timers(experiment_id: int) -> list[TimerRecord]:
+    """Return every persisted timer state for one experiment."""
+    with db_conn() as conn:
+        rows = conn.execute(
+            """SELECT id, experiment_id, step_id, total_seconds, remaining_seconds,
+                      overtime_seconds, status, timer_finished_at, started_at, updated_at
+               FROM timers WHERE experiment_id=? ORDER BY step_id""",
+            (experiment_id,),
+        ).fetchall()
+    return [TimerRecord.from_row(tuple(r)) for r in rows]
+
+
 def log_timer_event(
     experiment_id: int,
     step_id: int,

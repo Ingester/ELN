@@ -591,6 +591,9 @@ class StepCard(ft.Container):
 
         if not self._save_step(complete=True):
             return
+        if self._has_timer:
+            from timer_manager import get_timer_manager
+            get_timer_manager().complete_timer(self.step.experiment_id, self.step.id)
         self._completed = True
         self._btn_complete.text = "已完成"
         self._btn_complete.bgcolor = ft.Colors.GREY_400
