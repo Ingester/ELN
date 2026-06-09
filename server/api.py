@@ -566,6 +566,7 @@ function renderSteps(items){
         <label class="button" for="cam-${step.id}">拍照</label>
         <label class="button secondary" for="gal-${step.id}">相册</label>
         <label class="button secondary" for="any-${step.id}">文件</label>
+        <button type="button" class="secondary" onclick="pasteClipboard(${step.id})">剪贴板</button>
         <input id="cam-${step.id}" name="file" type="file" accept="image/*" capture="environment" onchange="markFile(this)" />
         <input id="gal-${step.id}" name="file2" type="file" accept="image/*" onchange="markFile(this)" />
         <input id="any-${step.id}" name="file3" type="file" onchange="markFile(this)" />
@@ -667,6 +668,7 @@ function renderSteps(items){
         <form class="photo-row" onsubmit="uploadPhoto(event, ${step.id})">
           <label class="button" for="cam-${step.id}">拍照</label>
           <label class="button secondary" for="gal-${step.id}">相册</label>
+          <button type="button" class="secondary" onclick="pasteClipboard(${step.id})">剪贴板</button>
           <input id="cam-${step.id}" name="file" type="file" accept="image/*" capture="environment" onchange="markFile(this)" />
           <input id="gal-${step.id}" name="file2" type="file" accept="image/*" onchange="markFile(this)" />
           <input id="name-${step.id}" name="attachment_name" type="text" placeholder="附件名称（默认原文件名）" />
@@ -1222,12 +1224,38 @@ function markFile(input){
 async function uploadPhoto(event, stepId){
   event.preventDefault();
   const form = event.currentTarget;
-  const file = form.file.files[0] || form.file2.files[0] || form.file3.files[0];
+  const file = form.file?.files?.[0] || form.file2?.files?.[0] || form.file3?.files?.[0];
   if(!file){ document.getElementById("file-"+stepId).textContent = "请先选择照片或文件"; return; }
+  const nameInput = document.getElementById("name-"+stepId);
+  await uploadFileToStep(file, stepId, nameInput ? nameInput.value : file.name);
+}
+
+function clipboardFileName(blob, index=0){
+  const types = {
+    "image/png":"png",
+    "image/jpeg":"jpg",
+    "image/webp":"webp",
+    "image/gif":"gif",
+    "application/pdf":"pdf"
+  };
+  const ext = types[blob.type] || (blob.type.split("/")[1] || "bin").replace(/[^a-z0-9]+/gi, "");
+  const now = new Date();
+  const stamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+    "_",
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0"),
+    String(now.getSeconds()).padStart(2, "0")
+  ].join("");
+  return `clipboard_${stamp}${index ? "_" + (index + 1) : ""}.${ext || "bin"}`;
+}
+
+async function uploadFileToStep(file, stepId, requestedName=""){
   const fd = new FormData();
   fd.append("file", file);
-  const nameInput = document.getElementById("name-"+stepId);
-  fd.append("attachment_name", nameInput ? nameInput.value : file.name);
+  fd.append("attachment_name", String(requestedName || file.name || "").trim() || clipboardFileName(file));
   try {
     const res = await fetch(`/api/photos/upload?step_id=${stepId}`, {method:"POST", body:fd});
     if(!res.ok) throw new Error(await res.text());
@@ -1237,6 +1265,62 @@ async function uploadPhoto(event, stepId){
     document.getElementById("file-"+stepId).textContent = "上传失败，文件保留在本机，请联网后重试";
   }
 }
+
+async function uploadClipboardFiles(files, stepId){
+  if(!files.length) return false;
+  const nameInput = document.getElementById("name-"+stepId);
+  const requestedName = nameInput ? nameInput.value.trim() : "";
+  for(let index = 0; index < files.length; index++){
+    const source = files[index];
+    const file = source.name
+      ? source
+      : new File([source], clipboardFileName(source, index), {type:source.type || "application/octet-stream"});
+    const displayName = requestedName
+      ? (files.length > 1 ? `${requestedName} ${index + 1}` : requestedName)
+      : file.name;
+    await uploadFileToStep(file, stepId, displayName);
+  }
+  return true;
+}
+
+async function pasteClipboard(stepId){
+  const fileStatus = document.getElementById("file-"+stepId);
+  if(!navigator.clipboard || !navigator.clipboard.read){
+    if(fileStatus) fileStatus.textContent = "请在页面中按 Ctrl+V，手机端可尝试长按粘贴";
+    return;
+  }
+  try {
+    const clipboardItems = await navigator.clipboard.read();
+    const files = [];
+    for(const item of clipboardItems){
+      for(const type of item.types){
+        if(type === "text/plain" || type === "text/html") continue;
+        files.push(await item.getType(type));
+      }
+    }
+    if(!await uploadClipboardFiles(files, stepId)){
+      if(fileStatus) fileStatus.textContent = "剪贴板中没有图片或文件";
+    }
+  } catch(e) {
+    if(fileStatus) fileStatus.textContent = "无法主动读取，请在页面中按 Ctrl+V 或长按粘贴";
+  }
+}
+
+document.addEventListener("paste", async event => {
+  const step = steps[currentStepIndex()];
+  if(!step) return;
+  const files = Array.from(event.clipboardData?.files || []);
+  if(!files.length){
+    for(const item of Array.from(event.clipboardData?.items || [])){
+      if(item.kind !== "file") continue;
+      const file = item.getAsFile();
+      if(file) files.push(file);
+    }
+  }
+  if(!files.length) return;
+  event.preventDefault();
+  await uploadClipboardFiles(files, step.id);
+});
 
 function esc(v){ return String(v ?? "").replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
 
