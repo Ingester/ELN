@@ -78,6 +78,11 @@ class StepUpdate(BaseModel):
     overtime_seconds: Optional[int] = None
 
 
+class AttachmentRename(BaseModel):
+    path: str
+    name: str
+
+
 class TimerUpdate(BaseModel):
     total_seconds: Optional[int] = None
     remaining_seconds: Optional[int] = None
@@ -199,7 +204,11 @@ def experiment_runner(experiment_id: Optional[int] = Query(None)):
     .warn { color:#d98200; }
     .photo-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px; }
     input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
-    .photos a { color:var(--orange); margin-right:10px; }
+    .photos { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; }
+    .photos a { color:var(--orange); }
+    .attachment-item { display:inline-flex; align-items:center; gap:4px; min-width:0; }
+    .attachment-rename { width:28px; height:28px; padding:0; border-radius:6px; background:transparent; color:var(--orange); font-size:19px; line-height:1; }
+    .attachment-rename:hover { background:#fff2e2; }
     .small { color:var(--muted); font-size:12px; }
     .timer { border:1px solid #ffd8a8; background:#fff8ef; border-radius:10px; padding:12px; margin-top:12px; }
     .timer-display { font-size:32px; font-weight:800; color:var(--orange); letter-spacing:0; }
@@ -513,6 +522,38 @@ function editFields(stepId){
   });
 }
 
+function renderAttachments(step, attachments){
+  return attachments.map(item => `
+    <span class="attachment-item">
+      <a href="/photos/${esc(item.path)}" target="_blank">${esc(item.name)}</a>
+      <button type="button" class="attachment-rename"
+        title="修改附件名称" aria-label="修改 ${esc(item.name)} 的名称"
+        data-step-id="${step.id}" data-path="${esc(item.path)}" data-name="${esc(item.name)}"
+        onclick="renameAttachment(this)">✎</button>
+    </span>
+  `).join("");
+}
+
+function renameAttachment(button){
+  const stepId = Number(button.dataset.stepId);
+  const attachmentPath = button.dataset.path || "";
+  const currentName = button.dataset.name || "";
+  openModal(
+    "修改附件名称",
+    `<div class="field"><label>附件名称</label><input id="editAttachmentName" value="${esc(currentName)}" maxlength="240" /></div>`,
+    async () => {
+      const name = document.getElementById("editAttachmentName").value.trim();
+      if(!name) throw new Error("附件名称不能为空");
+      const updated = await api(`/api/steps/${stepId}/attachments/name`, {
+        method:"PATCH",
+        body:JSON.stringify({path:attachmentPath, name})
+      });
+      setLocalStep(stepId, {attachments:updated.attachments, photo_paths:updated.photo_paths});
+      renderSteps(steps);
+    }
+  );
+}
+
 function renderSteps(items){
   const root = document.getElementById("steps");
   root.innerHTML = "";
@@ -541,7 +582,7 @@ function renderSteps(items){
       <textarea data-step="${step.id}" data-key="${STEP_NOTES_KEY}" oninput="saveDraft(${step.id})" placeholder="记录本步骤的观察、异常、样品情况或临时想法">${esc(notesValue)}</textarea>
     </div>`;
   const attachments = step.attachments || (step.photo_paths || []).map((p,i) => ({path:p, name:`附件 ${i+1}`}));
-  const photos = attachments.map(a => `<a href="/photos/${esc(a.path)}" target="_blank">${esc(a.name)}</a>`).join("");
+  const photos = renderAttachments(step, attachments);
   const timerBlock = totalSeconds > 0 ? `
     <div class="timer" id="timer-box-${step.id}">
       <div class="small">本地计时 · 电脑端负责响铃</div>
@@ -644,7 +685,7 @@ function renderSteps(items){
         <textarea data-step="${step.id}" data-key="${STEP_NOTES_KEY}" oninput="saveDraft(${step.id})" placeholder="记录本步骤的观察、异常、样品情况或临时想法">${esc(notesValue)}</textarea>
       </div>`;
     const attachments = step.attachments || (step.photo_paths || []).map((p,i) => ({path:p, name:`照片 ${i+1}`}));
-    const photos = attachments.map(a => `<a href="/photos/${esc(a.path)}" target="_blank">${esc(a.name)}</a>`).join("");
+    const photos = renderAttachments(step, attachments);
     const timerBlock = totalSeconds > 0 ? `
       <div class="timer" id="timer-box-${step.id}">
         <div class="small">本地计时 · 电脑端负责响铃</div>
@@ -1433,6 +1474,19 @@ def update_step(step_id: int, body: StepUpdate):
     if "photo_pending" in updates:
         updates["photo_pending"] = int(updates["photo_pending"])
     step = db_ops.update_step(step_id, **updates)
+    return _step_to_dict(step)
+
+
+@app.patch("/api/steps/{step_id}/attachments/name")
+def rename_step_attachment(step_id: int, body: AttachmentRename):
+    if not db_ops.get_step(step_id):
+        raise HTTPException(404, "Step not found")
+    if not body.name.strip():
+        raise HTTPException(400, "Attachment name cannot be empty")
+    try:
+        step = db_ops.rename_attachment(step_id, body.path, body.name)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
     return _step_to_dict(step)
 
 
