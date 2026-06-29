@@ -93,8 +93,20 @@ def check_connection() -> bool:
 # Experiments
 # ─────────────────────────────────────────────
 
-def list_experiments(status: Optional[str] = None) -> list[dict]:
-    return _get("/api/experiments", {"status": status})
+def list_experiments(
+    status: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+) -> list[dict]:
+    return _get("/api/experiments", {"status": status, "limit": limit, "offset": offset})
+
+
+def list_experiment_summaries(
+    status: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+) -> list[dict]:
+    return list_experiments(status=status, limit=limit, offset=offset)
 
 
 def create_experiment(name: str, protocol_json: str = None, protocol=None,

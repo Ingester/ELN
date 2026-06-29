@@ -119,6 +119,46 @@ def build_report_view(
             ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg"
         }
 
+    def _build_lazy_image(src: str, name: str) -> ft.Control:
+        holder = ft.Container(
+            content=ft.Icon(
+                ft.Icons.IMAGE_OUTLINED,
+                size=48,
+                color=ft.Colors.GREY_400,
+            ),
+            height=120,
+            alignment=ft.Alignment.CENTER,
+            bgcolor=ft.Colors.GREY_50,
+            border_radius=6,
+        )
+
+        def _show_preview(_):
+            holder.content = ft.Image(
+                src=src,
+                fit=ft.BoxFit.CONTAIN,
+                width=180,
+                height=120,
+                error_content=ft.Icon(
+                    ft.Icons.BROKEN_IMAGE_OUTLINED,
+                    size=40,
+                    color=ft.Colors.GREY_400,
+                ),
+            )
+            preview_button.visible = False
+            try:
+                holder.update()
+                preview_button.update()
+            except Exception:
+                page.update()
+
+        preview_button = ft.TextButton(
+            "显示预览",
+            icon=ft.Icons.VISIBILITY_OUTLINED,
+            on_click=_show_preview,
+            style=ft.ButtonStyle(color=ft.Colors.ORANGE_600),
+        )
+        return ft.Column([holder, preview_button], spacing=2)
+
     def _build_photo_gallery() -> ft.Control:
         rows: list[ft.Control] = []
         for step in data_provider.get_steps(experiment_id):
@@ -131,17 +171,7 @@ def build_report_view(
                 name = item["name"]
                 src = _photo_src(path)
                 if _is_image_attachment(path):
-                    body = ft.Image(
-                        src=src,
-                        fit=ft.BoxFit.CONTAIN,
-                        width=180,
-                        height=120,
-                        error_content=ft.Icon(
-                            ft.Icons.BROKEN_IMAGE_OUTLINED,
-                            size=40,
-                            color=ft.Colors.GREY_400,
-                        ),
-                    )
+                    body = _build_lazy_image(src, name)
                 else:
                     body = ft.Container(
                         content=ft.Icon(

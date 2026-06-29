@@ -42,21 +42,39 @@ def build_history_view(
 ) -> ft.Control:
 
     list_col = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=0)
+    page_size = 20
+    loaded_count = [0]
+    has_more = [False]
+    loading_text = ft.Text("", size=12, color=ft.Colors.GREY_500)
 
-    def _load():
-        list_col.controls.clear()
+    def _load(reset: bool = True):
+        if reset:
+            loaded_count[0] = 0
+            list_col.controls.clear()
         try:
-            completed = data_provider.list_experiments(status="completed")
-            archived  = data_provider.list_experiments(status="archived")
-            all_exps  = completed + archived
+            if hasattr(data_provider, "list_experiment_summaries"):
+                all_exps = data_provider.list_experiment_summaries(
+                    status="completed,archived",
+                    limit=page_size + 1,
+                    offset=loaded_count[0],
+                )
+            else:
+                completed = data_provider.list_experiments(status="completed")
+                archived = data_provider.list_experiments(status="archived")
+                all_exps = (completed + archived)[loaded_count[0]:loaded_count[0] + page_size + 1]
         except Exception as e:
+            if reset:
+                list_col.controls.clear()
             list_col.controls.append(
                 ft.Text(f"{tr('加载失败')}：{e}", color=ft.Colors.RED_400)
             )
             page.update()
             return
 
-        if not all_exps:
+        visible_exps = all_exps[:page_size]
+        has_more[0] = len(all_exps) > page_size
+
+        if reset and not visible_exps:
             list_col.controls.append(
                 ft.Container(
                     content=ft.Column([
@@ -68,9 +86,27 @@ def build_history_view(
                 )
             )
         else:
-            for exp in all_exps:
+            if not reset and list_col.controls and getattr(list_col.controls[-1], "data", None) == "load_more":
+                list_col.controls.pop()
+            for exp in visible_exps:
                 list_col.controls.append(_build_exp_card(exp))
+            loaded_count[0] += len(visible_exps)
+            if has_more[0]:
+                list_col.controls.append(_load_more_control())
+        loading_text.value = f"{tr('已加载')} {loaded_count[0]} {tr('条')}" if loaded_count[0] else ""
         page.update()
+
+    def _load_more_control() -> ft.Container:
+        return ft.Container(
+            data="load_more",
+            content=ft.TextButton(
+                tr("加载更多"),
+                on_click=lambda _: _load(reset=False),
+                style=ft.ButtonStyle(color=ft.Colors.ORANGE_600),
+            ),
+            alignment=ft.Alignment.CENTER,
+            padding=ft.Padding.symmetric(vertical=8),
+        )
 
     def _build_exp_card(exp) -> ft.Container:
         exp_id = _get(exp, "id")
@@ -157,6 +193,18 @@ def build_history_view(
 
     def _reuse_protocol(exp):
         """Create a new experiment from the same protocol."""
+        if not _get(exp, "protocol_json", ""):
+            try:
+                exp = data_provider.get_experiment(_get(exp, "id"))
+            except Exception as ex:
+                _open_overlay(
+                    page,
+                    ft.SnackBar(
+                        content=ft.Text(f"{tr('加载失败')}：{ex}"),
+                        bgcolor=ft.Colors.RED_400,
+                    ),
+                )
+                return
         tf = ft.TextField(
             value=_get(exp, "name", "") + " (重复)",
             label=tr("新实验名称"),
@@ -207,13 +255,14 @@ def build_history_view(
                       on_click=lambda _: on_back(),
                       tooltip=tr("返回")),
         ft.Text(tr("历史记录"), size=18, weight=ft.FontWeight.BOLD),
+        loading_text,
         ft.Container(expand=True),
         ft.IconButton(ft.Icons.REFRESH,
-                      on_click=lambda _: _load(),
+                      on_click=lambda _: _load(reset=True),
                       icon_color=ft.Colors.GREY_600),
     ])
 
-    _load()
+    _load(reset=True)
 
     return ft.Column([
         ft.Container(

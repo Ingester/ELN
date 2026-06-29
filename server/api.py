@@ -204,9 +204,16 @@ def experiment_runner(experiment_id: Optional[int] = Query(None)):
     .warn { color:#d98200; }
     .photo-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px; }
     input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
-    .photos { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; }
+    .photos { display:grid; grid-template-columns:repeat(auto-fill, minmax(170px, 220px)); gap:12px; align-items:start; }
     .photos a { color:var(--orange); }
-    .attachment-item { display:inline-flex; align-items:center; gap:4px; min-width:0; }
+    .attachment-item { display:flex; align-items:center; gap:6px; min-width:0; }
+    .attachment-item.file { min-height:42px; border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+    .attachment-item.file a { min-width:0; overflow-wrap:anywhere; }
+    .attachment-item.image { display:grid; gap:6px; }
+    .attachment-preview { display:block; width:100%; aspect-ratio:4 / 3; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:#f7f7f7; }
+    .attachment-preview img { display:block; width:100%; height:100%; object-fit:contain; }
+    .attachment-caption { display:flex; align-items:center; gap:4px; min-width:0; }
+    .attachment-caption > a { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .attachment-rename { width:28px; height:28px; padding:0; border-radius:6px; background:transparent; color:var(--orange); font-size:19px; line-height:1; }
     .attachment-rename:hover { background:#fff2e2; }
     .small { color:var(--muted); font-size:12px; }
@@ -523,15 +530,37 @@ function editFields(stepId){
 }
 
 function renderAttachments(step, attachments){
-  return attachments.map(item => `
-    <span class="attachment-item">
-      <a href="/photos/${esc(item.path)}" target="_blank">${esc(item.name)}</a>
-      <button type="button" class="attachment-rename"
-        title="修改附件名称" aria-label="修改 ${esc(item.name)} 的名称"
-        data-step-id="${step.id}" data-path="${esc(item.path)}" data-name="${esc(item.name)}"
-        onclick="renameAttachment(this)">✎</button>
-    </span>
-  `).join("");
+  return attachments.map(item => {
+    const url = attachmentUrl(item.path);
+    const renameButton = `<button type="button" class="attachment-rename"
+      title="修改附件名称" aria-label="修改 ${esc(item.name)} 的名称"
+      data-step-id="${step.id}" data-path="${esc(item.path)}" data-name="${esc(item.name)}"
+      onclick="renameAttachment(this)">✎</button>`;
+    if(isImageAttachment(item.path)){
+      return `<span class="attachment-item image">
+        <a class="attachment-preview" href="${esc(url)}" target="_blank" rel="noopener" title="打开原图">
+          <img src="${esc(url)}" alt="${esc(item.name)}" loading="lazy" />
+        </a>
+        <span class="attachment-caption">
+          <a href="${esc(url)}" target="_blank" rel="noopener" title="${esc(item.name)}">${esc(item.name)}</a>
+          ${renameButton}
+        </span>
+      </span>`;
+    }
+    return `<span class="attachment-item file">
+      <a href="${esc(url)}" target="_blank" rel="noopener">${esc(item.name)}</a>
+      ${renameButton}
+    </span>`;
+  }).join("");
+}
+
+function attachmentUrl(path){
+  const clean = String(path || "").replace(/\\\\/g, "/").replace(/^\\/+/, "");
+  return "/photos/" + clean.split("/").map(encodeURIComponent).join("/");
+}
+
+function isImageAttachment(path){
+  return /\\.(jpe?g|png|gif|webp|bmp|tiff?|svg)$/i.test(String(path || ""));
 }
 
 function renameAttachment(button){
@@ -1382,21 +1411,12 @@ loadExperiments();
 # ─────────────────────────────────────────────
 
 @app.get("/api/experiments")
-def list_experiments(status: Optional[str] = Query(None)):
-    exps = db_ops.list_experiments(status=status)
-    result = []
-    for e in exps:
-        progress = db_ops.get_experiment_progress(e.id)
-        result.append({
-            "id": e.id,
-            "name": e.name,
-            "created_at": e.created_at,
-            "status": e.status,
-            "protocol_id": e.protocol_id,
-            "notes": e.notes,
-            **progress,
-        })
-    return result
+def list_experiments(
+    status: Optional[str] = Query(None),
+    limit: Optional[int] = Query(None, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    return db_ops.list_experiment_summaries(status=status, limit=limit, offset=offset)
 
 
 @app.post("/api/experiments", status_code=201)
@@ -2100,7 +2120,7 @@ def _attachment_preview_html(path: str, label: str) -> str:
     if _is_image_attachment(path):
         return (
             f'<a href="{url}" target="_blank" rel="noopener">'
-            f'<img src="{url}" alt="{safe_label}" loading="lazy" />'
+            f'<img src="{url}" alt="{safe_label}" loading="lazy" decoding="async" />'
             "</a>"
             '<div class="attachment-actions">'
             f'<a href="{url}" target="_blank" rel="noopener">打开原图</a>'

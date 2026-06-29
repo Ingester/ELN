@@ -341,6 +341,73 @@ def list_experiments(status: Optional[ExperimentStatus] = None) -> list[Experime
     return [Experiment.from_row(tuple(r)) for r in rows]
 
 
+def list_experiment_summaries(
+    status: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Return list-page experiment data without loading protocol_json."""
+    where = ""
+    params: list[Any] = []
+    statuses = [
+        item.strip()
+        for item in str(status or "").split(",")
+        if item.strip()
+    ]
+    if statuses:
+        placeholders = ", ".join("?" for _ in statuses)
+        where = f"WHERE e.status IN ({placeholders})"
+        params.extend(statuses)
+
+    limit_clause = ""
+    if limit is not None:
+        safe_limit = max(1, min(int(limit), 200))
+        safe_offset = max(0, int(offset or 0))
+        limit_clause = " LIMIT ? OFFSET ?"
+        params.extend([safe_limit, safe_offset])
+
+    query = f"""
+        SELECT
+            e.id,
+            e.name,
+            e.created_at,
+            e.status,
+            e.protocol_id,
+            e.notes,
+            COUNT(s.id) AS total_steps,
+            SUM(CASE WHEN s.completed_at IS NOT NULL THEN 1 ELSE 0 END) AS completed_steps,
+            COALESCE(
+                MIN(CASE WHEN s.completed_at IS NULL THEN s.step_index END),
+                MAX(s.step_index),
+                0
+            ) AS current_step_index,
+            MAX(s.completed_at) AS completed_at
+        FROM experiments e
+        LEFT JOIN steps s ON s.experiment_id = e.id
+        {where}
+        GROUP BY e.id
+        ORDER BY e.created_at DESC
+        {limit_clause}
+    """
+    with db_conn() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "created_at": row["created_at"],
+            "status": row["status"],
+            "protocol_id": row["protocol_id"],
+            "notes": row["notes"] or "",
+            "total_steps": int(row["total_steps"] or 0),
+            "completed_steps": int(row["completed_steps"] or 0),
+            "current_step_index": int(row["current_step_index"] or 0),
+            "completed_at": row["completed_at"],
+        }
+        for row in rows
+    ]
+
+
 def update_experiment(exp_id: int, **kwargs) -> Optional[Experiment]:
     """Update any subset of: name, status, notes."""
     allowed = {"name", "status", "notes"}

@@ -68,11 +68,18 @@ def build_home_view(
 
     def _list_visible_experiments():
         try:
-            exps = data_provider.list_experiments(status="active")
-            try:
-                exps += data_provider.list_experiments(status="needs_wrapup")
-            except Exception:
-                pass
+            if hasattr(data_provider, "list_experiment_summaries"):
+                exps = data_provider.list_experiment_summaries(
+                    status="active,needs_wrapup",
+                    limit=100,
+                    offset=0,
+                )
+            else:
+                exps = data_provider.list_experiments(status="active")
+                try:
+                    exps += data_provider.list_experiments(status="needs_wrapup")
+                except Exception:
+                    pass
         except Exception as e:
             return None, e
         return exps, None
