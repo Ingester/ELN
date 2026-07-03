@@ -42,7 +42,7 @@ def build_settings_view(
     tf_server_url = ft.TextField(
         value=current_url,
         label=_("服务器地址"),
-        hint_text="http://192.168.1.100:8000",
+        hint_text="http://192.168.1.100:8600",
         keyboard_type=ft.KeyboardType.URL,
         visible=is_mobile,
         border_color=ft.Colors.ORANGE_300,
@@ -126,7 +126,7 @@ def build_settings_view(
                     color=ft.Colors.GREEN_600 if server_running else ft.Colors.RED_400,
                 ),
             ], spacing=6),
-            ft.Text(f"{_('局域网地址：')}http://{local_ip}:8000",
+            ft.Text(f"{_('局域网地址：')}http://{local_ip}:8600",
                     size=13, color=ft.Colors.GREY_600,
                     selectable=True),
             ft.Text(_("在 iPhone 上输入此地址连接"),

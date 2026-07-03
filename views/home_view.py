@@ -232,10 +232,10 @@ def build_home_view(
         if configured:
             return configured
         try:
-            from server.startup import get_local_ip
-            return f"http://{get_local_ip()}:8000"
+            from server.startup import get_local_ip, get_api_port
+            return f"http://{get_local_ip()}:{get_api_port()}"
         except Exception:
-            return "http://127.0.0.1:8000"
+            return "http://127.0.0.1:8600"
 
     def _timer_payload(exp_id: int) -> dict:
         """Find any active timer for this experiment and return render data."""

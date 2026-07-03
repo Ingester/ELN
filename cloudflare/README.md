@@ -1,6 +1,6 @@
 # ELN Cloudflare Tunnel Setup
 
-This setup exposes only the native FastAPI HTML interface on `127.0.0.1:8000`.
+This setup exposes only the native FastAPI HTML interface on `127.0.0.1:8600`.
 Do not expose the Flet desktop/web shell on `8550`.
 
 There are two valid Cloudflare modes:
@@ -40,7 +40,7 @@ In the tunnel page, add a public hostname:
 - Subdomain: `eln` or another name you want.
 - Domain: your Cloudflare-managed domain.
 - Type: `HTTP`.
-- URL: `localhost:8000`.
+- URL: `localhost:8600`.
 - Path: leave empty.
 
 The public URL will look like:
@@ -73,7 +73,7 @@ credentials-file: C:\Users\YOUR_WINDOWS_USER\.cloudflared\YOUR_TUNNEL_ID.json
 
 ingress:
   - hostname: eln.yourdomain.com
-    service: http://127.0.0.1:8000
+    service: http://127.0.0.1:8600
   - service: http_status:404
 ```
 
@@ -115,7 +115,7 @@ start_eln_cloudflare.bat
 
 This starts:
 
-- ELN API/native HTML on `127.0.0.1:8000`.
+- ELN API/native HTML on `127.0.0.1:8600`.
 - Flet local shell on `127.0.0.1:8550`, kept local only.
 - If `cloudflare\config.yml` exists: local `cloudflared tunnel --config ... run`.
 - If no `config.yml` exists: assumes the Cloudflare Dashboard Windows service is

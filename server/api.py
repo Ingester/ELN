@@ -1,6 +1,6 @@
 """
 ELN App — FastAPI Server
-All REST endpoints. Runs on Windows as the data host (port 8000).
+All REST endpoints. Runs on Windows as the data host (default port 8600, env ELN_API_PORT).
 """
 
 from __future__ import annotations

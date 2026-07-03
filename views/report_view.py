@@ -43,19 +43,21 @@ def build_report_view(
         configured = "" if os.environ.get("ELN_DYNAMIC_PUBLIC_URL") == "1" else os.environ.get("ELN_API_PUBLIC_URL", "").rstrip("/")
         if configured:
             return configured
+        from server.startup import get_api_port
+        api_port = get_api_port()
         for source in (getattr(page, "url", ""), getattr(page, "route", "")):
             try:
                 parsed = urlparse(str(source))
                 if parsed.scheme and parsed.hostname:
                     host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
-                    return f"{parsed.scheme}://{host}:8000"
+                    return f"{parsed.scheme}://{host}:{api_port}"
             except Exception:
                 pass
         try:
             from server.startup import get_local_ip
-            return f"http://{get_local_ip()}:8000"
+            return f"http://{get_local_ip()}:{api_port}"
         except Exception:
-            return "http://127.0.0.1:8000"
+            return f"http://127.0.0.1:{api_port}"
 
     def _photo_src(path: str) -> str:
         clean_path = str(path).replace("\\", "/").lstrip("/")

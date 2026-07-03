@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL: str = "http://192.168.1.100:8000"   # default; overridden from settings
+_BASE_URL: str = "http://192.168.1.100:8600"   # default; overridden from settings
 
 
 def set_base_url(url: str) -> None:

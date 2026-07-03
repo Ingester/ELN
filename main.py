@@ -136,8 +136,8 @@ def main(page: ft.Page) -> None:
 
     timer_bar = ft.Container(
         visible=False,
-        padding=ft.padding.symmetric(6, 10),
-        margin=ft.margin.only(left=10, right=10, top=8),
+        padding=ft.Padding.symmetric(vertical=6, horizontal=10),
+        margin=ft.Margin.only(left=10, right=10, top=8),
     )
     _timer_bar_stop = threading.Event()
 
@@ -166,7 +166,7 @@ def main(page: ft.Page) -> None:
             ], spacing=5, tight=True),
             bgcolor=ft.Colors.RED_600 if over else ft.Colors.BLUE_GREY_900,
             border_radius=999,
-            padding=ft.padding.symmetric(6, 12),
+            padding=ft.Padding.symmetric(vertical=6, horizontal=12),
             on_click=lambda e: _navigate(ROUTE_STEPPER,
                                          {"experiment_id": eid, "step_id": sid}),
             tooltip=f"{title} · 点击打开该步骤",
@@ -412,10 +412,10 @@ def main(page: ft.Page) -> None:
         if configured:
             return configured
         try:
-            from server.startup import get_local_ip
-            return f"http://{get_local_ip()}:8000"
+            from server.startup import get_local_ip, get_api_port
+            return f"http://{get_local_ip()}:{get_api_port()}"
         except Exception:
-            return "http://127.0.0.1:8000"
+            return "http://127.0.0.1:8600"
 
     # ── Navigation bar ───────────────────────────
     _TAB_ROUTES = [ROUTE_HOME, ROUTE_PROTOCOLS, ROUTE_BOX, ROUTE_SETTINGS]

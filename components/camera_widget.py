@@ -138,10 +138,10 @@ class CameraWidget(ft.Column):
         if configured:
             return configured
         try:
-            from server.startup import get_local_ip
-            return f"http://{get_local_ip()}:8000"
+            from server.startup import get_local_ip, get_api_port
+            return f"http://{get_local_ip()}:{get_api_port()}"
         except Exception:
-            return "http://127.0.0.1:8000"
+            return "http://127.0.0.1:8600"
 
     def _open_web_uploader(self, _) -> None:
         url = self._web_upload_url()

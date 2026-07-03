@@ -21,7 +21,7 @@ if (-not $env:ELN_AUTH_PASSWORD) {
     throw "Set ELN_AUTH_PASSWORD before starting public tunnel mode. Example: setx ELN_AUTH_PASSWORD `"your-long-password`""
 }
 
-$apiListening = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
+$apiListening = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8600 -State Listen -ErrorAction SilentlyContinue
 if ($apiListening -and $Restart) {
     $ownerIds = $apiListening | Select-Object -ExpandProperty OwningProcess -Unique
     foreach ($ownerId in $ownerIds) {
@@ -30,12 +30,12 @@ if ($apiListening -and $Restart) {
         }
     }
     Start-Sleep -Seconds 2
-    $apiListening = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
+    $apiListening = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8600 -State Listen -ErrorAction SilentlyContinue
 }
 
 if (-not $apiListening) {
     $env:ELN_API_HOST = "127.0.0.1"
-    $env:ELN_API_PORT = "8000"
+    $env:ELN_API_PORT = "8600"
     $env:ELN_WEB_HOST = "127.0.0.1"
     $env:ELN_WEB_PORT = "8550"
     $env:ELN_WEB_OPEN = "0"
@@ -48,7 +48,7 @@ if (-not $apiListening) {
         -RedirectStandardError (Join-Path $LogDir "eln_cloudflare_stderr.log")
     Start-Sleep -Seconds 3
 } else {
-    Write-Warning "ELN API is already running on 127.0.0.1:8000. If the password was changed, rerun with: .\start_eln_cloudflare.ps1 -Restart"
+    Write-Warning "ELN API is already running on 127.0.0.1:8600. If the password was changed, rerun with: .\start_eln_cloudflare.ps1 -Restart"
 }
 
 if (Test-Path $ConfigPath) {
@@ -76,8 +76,8 @@ if (Test-Path $ConfigPath) {
 }
 
 if (-not $NoBrowser) {
-    Start-Process "http://127.0.0.1:8000/run"
+    Start-Process "http://127.0.0.1:8600/run"
 }
 
-Write-Host "ELN API: http://127.0.0.1:8000/run"
-Write-Host "Cloudflare public hostname should point to service URL: http://localhost:8000"
+Write-Host "ELN API: http://127.0.0.1:8600/run"
+Write-Host "Cloudflare public hostname should point to service URL: http://localhost:8600"

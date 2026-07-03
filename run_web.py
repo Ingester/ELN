@@ -26,7 +26,7 @@ if __name__ == "__main__":
     host = os.environ.get("ELN_WEB_HOST", "0.0.0.0")
     port = _env_int("ELN_WEB_PORT", 8550)
     api_host = os.environ.get("ELN_API_HOST", "0.0.0.0")
-    api_port = _env_int("ELN_API_PORT", 8000)
+    api_port = _env_int("ELN_API_PORT", 8600)
 
     os.environ["ELN_WEB_MODE"] = "1"
     os.environ["ELN_DYNAMIC_PUBLIC_URL"] = "1"

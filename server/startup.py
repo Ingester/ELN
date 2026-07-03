@@ -17,9 +17,21 @@ _server_thread: threading.Thread | None = None
 _uvicorn_server = None
 
 
-def start_server(host: str = "0.0.0.0", port: int = 8000) -> None:
+def get_api_port() -> int:
+    """ELN API port. Default moved off 8000 (occupied by WSL claude-science
+    under mirrored networking) to 8600."""
+    try:
+        return int(os.environ.get("ELN_API_PORT", "8600"))
+    except ValueError:
+        return 8600
+
+
+def start_server(host: str = "0.0.0.0", port: int = None) -> None:
     """Start FastAPI server in a daemon background thread."""
     global _server_thread, _uvicorn_server
+
+    if port is None:
+        port = get_api_port()
 
     if _server_thread is not None and _server_thread.is_alive():
         return
@@ -87,7 +99,7 @@ def get_local_ip() -> str:
 def is_server_running() -> bool:
     return (
         (_server_thread is not None and _server_thread.is_alive())
-        or _is_port_open("127.0.0.1", 8000)
+        or _is_port_open("127.0.0.1", get_api_port())
     )
 
 
