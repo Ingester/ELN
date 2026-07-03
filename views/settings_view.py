@@ -427,6 +427,63 @@ Common mistakes
         padding=12,
     )
 
+    # ── AI 整理语音速记 ───────────────────────────
+    from utils.app_settings import get_ai_config, set_ai_config
+    _ai = get_ai_config()
+
+    ai_provider = ft.Dropdown(
+        value=_ai["provider"],
+        label=_("模型服务"),
+        options=[
+            ft.dropdown.Option("claude", "Claude (Anthropic)"),
+            ft.dropdown.Option("openai", "OpenAI / 兼容接口"),
+        ],
+        width=260, dense=True,
+    )
+    ai_key = ft.TextField(
+        value=_ai["api_key"], label=_("API 密钥"), password=True, can_reveal_password=True,
+        border_color=ft.Colors.ORANGE_300, focused_border_color=ft.Colors.ORANGE_600,
+    )
+    ai_model = ft.TextField(
+        value=_ai["model"], label=_("模型"),
+        hint_text="claude-opus-4-8 / gpt-4o-mini",
+        border_color=ft.Colors.ORANGE_300, focused_border_color=ft.Colors.ORANGE_600,
+    )
+    ai_base = ft.TextField(
+        value=_ai["base_url"], label=_("自定义地址（可选）"),
+        hint_text=_("留空用官方地址；兼容接口填 base_url"),
+        border_color=ft.Colors.ORANGE_300, focused_border_color=ft.Colors.ORANGE_600,
+    )
+    ai_status = ft.Text("", size=12)
+
+    def _save_ai(_):
+        set_ai_config(
+            provider=ai_provider.value,
+            api_key=ai_key.value.strip(),
+            model=ai_model.value.strip(),
+            base_url=ai_base.value.strip(),
+        )
+        ai_status.value = _("已保存。手机端在语音速记里点「AI 整理」即可使用。")
+        ai_status.color = ft.Colors.GREEN_600
+        page.update()
+
+    ai_section = ft.Container(
+        content=ft.Column([
+            ft.Text(_("AI 整理语音速记"), size=14, weight=ft.FontWeight.W_500),
+            ft.Text(_("边做实验边随口说，AI 把口语整理成规范记录并填进对应步骤（先给草稿，你确认后再写入）。"),
+                    size=12, color=ft.Colors.GREY_600),
+            ai_provider, ai_key, ai_model, ai_base,
+            ft.Row([
+                ft.ElevatedButton(_("保存"), on_click=_save_ai,
+                                  bgcolor=ft.Colors.ORANGE_600, color=ft.Colors.WHITE, height=32),
+            ]),
+            ai_status,
+        ], spacing=8),
+        border=ft.Border.all(1, ft.Colors.GREY_200),
+        border_radius=8,
+        padding=12,
+    )
+
     # ── About ────────────────────────────────────
     about_section = ft.Container(
         content=ft.Column([
@@ -482,6 +539,7 @@ Common mistakes
                 mobile_server_section,
                 server_info,
                 language_section,
+                ai_section,
                 notif_section,
                 protocol_help,
                 about_section,

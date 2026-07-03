@@ -42,3 +42,53 @@ def set_language(language: str) -> None:
 
 def is_english() -> bool:
     return get_language() == "en"
+
+
+# ─────────────────────────────────────────────
+# AI (语音速记整理) configuration
+# ─────────────────────────────────────────────
+
+_AI_DEFAULTS = {
+    "provider": "claude",   # "claude" | "openai"
+    "api_key": "",
+    "base_url": "",         # optional custom endpoint (OpenAI-compatible)
+    "model": "",            # empty → provider default
+}
+
+
+def get_ai_config() -> dict[str, str]:
+    cfg = load_settings().get("ai", {})
+    if not isinstance(cfg, dict):
+        cfg = {}
+    out = dict(_AI_DEFAULTS)
+    for k in out:
+        v = cfg.get(k)
+        if isinstance(v, str):
+            out[k] = v
+    provider = out["provider"].lower()
+    out["provider"] = "openai" if provider.startswith("openai") else "claude"
+    if not out["model"]:
+        out["model"] = "claude-opus-4-8" if out["provider"] == "claude" else "gpt-4o-mini"
+    return out
+
+
+def set_ai_config(provider: str = None, api_key: str = None,
+                  base_url: str = None, model: str = None) -> None:
+    settings = load_settings()
+    cfg = settings.get("ai", {})
+    if not isinstance(cfg, dict):
+        cfg = {}
+    if provider is not None:
+        cfg["provider"] = "openai" if str(provider).lower().startswith("openai") else "claude"
+    if api_key is not None:
+        cfg["api_key"] = api_key
+    if base_url is not None:
+        cfg["base_url"] = base_url.strip()
+    if model is not None:
+        cfg["model"] = model.strip()
+    settings["ai"] = cfg
+    save_settings(settings)
+
+
+def ai_configured() -> bool:
+    return bool(get_ai_config().get("api_key"))

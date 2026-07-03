@@ -445,6 +445,19 @@ _RUNNER_CSS = """
     .sheet .grab { width:40px; height:4px; border-radius:99px; background:#ddd8d0; margin:0 auto 12px; }
     #voiceLive { min-height:22px; color:var(--accent-strong); font-size:14px; margin:8px 0 2px; }
     #voiceText { min-height:96px; margin-top:6px; }
+
+    .ai-step { border:1px solid var(--line); border-radius:12px; padding:12px; margin:10px 0; background:#fbfaf7; }
+    .ai-step h3 { margin:0 0 8px; font-size:14px; }
+    .ai-step textarea { min-height:66px; }
+    .ai-field { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center; margin-top:8px; padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+    .ai-field .fl { min-width:0; }
+    .ai-field .fl .k { font-weight:600; font-size:13.5px; }
+    .ai-field .fl .chg { font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+    .ai-field .fl .chg b { color:var(--accent-strong); }
+    .ai-field .fl .rs { font-size:11.5px; color:#9a938a; overflow-wrap:anywhere; }
+    .ai-field input[type=checkbox] { width:22px; height:22px; }
+    .ai-unassigned { border:1px dashed #d9c48f; background:#fffbf0; border-radius:10px; padding:10px; margin-top:10px; font-size:13px; }
+    .ai-applied { color:var(--green); font-weight:700; font-size:12.5px; margin-top:6px; }
     .voice-controls { display:flex; gap:10px; align-items:center; margin-top:10px; }
     .voice-controls button { flex:1; min-height:46px; }
     #voiceRecBtn.rec { background:linear-gradient(180deg,#e05555,#c62828); }
@@ -490,9 +503,25 @@ _RUNNER_BODY = """
       <button id="voiceRecBtn" onclick="toggleVoiceRec()">开始说话</button>
       <button class="green" onclick="saveVoiceText()">存入当前步骤</button>
     </div>
+    <div class="voice-controls" style="margin-top:8px">
+      <button class="secondary" style="background:linear-gradient(180deg,#6d5ae0,#5a45c8);color:#fff;box-shadow:none" onclick="runAiOrganize()">✨ AI 整理全部速记</button>
+    </div>
+    <div class="small" id="aiHint" style="margin-top:4px"></div>
     <div class="voice-all">
       <div class="section-head" style="margin-top:0"><h2>本实验全部速记</h2></div>
       <div id="voiceAllList" class="voice-list"></div>
+    </div>
+  </div>
+
+  <div id="aiBackdrop" class="sheet-backdrop" onclick="closeAiPanel()"></div>
+  <div id="aiSheet" class="sheet">
+    <div class="grab"></div>
+    <h2>✨ AI 整理草稿</h2>
+    <div class="small" id="aiDraftHint">AI 已把你的口语整理成下面的草稿。确认无误再写入记录，数字类字段请核对。</div>
+    <div id="aiDraftBody"></div>
+    <div class="voice-controls">
+      <button class="green" onclick="applyAllAi()">全部写入记录</button>
+      <button class="secondary" onclick="closeAiPanel()">关闭</button>
     </div>
   </div>
 
@@ -1820,6 +1849,107 @@ async function saveVoiceText(){
   }
 }
 
+// ── AI 整理草稿 ─────────────────────────────────────────
+let aiDraft = null;
+
+async function runAiOrganize(){
+  const hint = document.getElementById("aiHint");
+  hint.textContent = "正在让 AI 整理…（首次可能要几秒到十几秒）";
+  hint.style.color = "#6d5ae0";
+  try {
+    const draft = await api(`/api/experiments/${selectedExperiment}/ai_organize`, {
+      method:"POST", body: JSON.stringify({})
+    });
+    aiDraft = draft;
+    hint.textContent = "";
+    renderAiDraft(draft);
+    openAiPanel();
+  } catch(e) {
+    hint.style.color = "#d98200";
+    hint.textContent = "整理失败：" + (e.message || e);
+  }
+}
+
+function openAiPanel(){
+  document.getElementById("aiBackdrop").classList.add("open");
+  document.getElementById("aiSheet").classList.add("open");
+}
+function closeAiPanel(){
+  document.getElementById("aiBackdrop").classList.remove("open");
+  document.getElementById("aiSheet").classList.remove("open");
+}
+
+function renderAiDraft(draft){
+  const body = document.getElementById("aiDraftBody");
+  const stepsHtml = (draft.steps || []).map((s, si) => {
+    const fields = (s.fields || []).map((f, fi) => {
+      const changed = f.current && f.current !== f.suggested;
+      const cur = f.current ? `<span class="chg">原值 <b>${esc(f.current)}</b> → 建议 <b>${esc(f.suggested)}</b></span>`
+                            : `<span class="chg">建议填 <b>${esc(f.suggested)}</b></span>`;
+      const rs = f.reason ? `<div class="rs">依据：${esc(f.reason)}</div>` : "";
+      return `<label class="ai-field">
+        <span class="fl"><span class="k">${esc(f.label)}</span>${cur}${rs}</span>
+        <input type="checkbox" data-si="${si}" data-fi="${fi}" checked />
+      </label>`;
+    }).join("");
+    const noteBox = `<textarea data-note="${si}" placeholder="这一步的备注（可改）">${esc(s.note || "")}</textarea>`;
+    return `<div class="ai-step" id="ai-step-${si}">
+      <h3>第${s.step_index + 1}步 · ${esc(s.title)}</h3>
+      ${noteBox}
+      ${fields}
+      <div class="voice-controls" style="margin-top:8px">
+        <button class="green" onclick="applyAiStep(${si})">写入这一步</button>
+      </div>
+      <div class="ai-applied" id="ai-applied-${si}" style="display:none">✓ 已写入</div>
+    </div>`;
+  }).join("");
+  const un = (draft.unassigned || "").trim()
+    ? `<div class="ai-unassigned"><b>未能归入步骤：</b>${esc(draft.unassigned)}</div>` : "";
+  const empty = (!draft.steps || !draft.steps.length) && !un
+    ? '<div class="small">AI 没能从速记里提取到可写入的内容。</div>' : "";
+  body.innerHTML = `<div class="small" style="margin-bottom:8px">模型：${esc(draft.provider)}/${esc(draft.model)} · 来源 ${draft.source_note_count} 条速记</div>${stepsHtml}${un}${empty}`;
+}
+
+async function applyAiStep(si){
+  const s = aiDraft && aiDraft.steps && aiDraft.steps[si];
+  if(!s) return;
+  const stepId = s.step_id;
+  const step = steps.find(x => x.id === stepId);
+  if(!step){ alert("步骤未找到，请先刷新实验。"); return; }
+  const values = {...(step.values || {})};
+  // fields
+  document.querySelectorAll(`input[data-si="${si}"]:checked`).forEach(cb => {
+    const f = s.fields[Number(cb.dataset.fi)];
+    if(f) values[f.key] = f.suggested;
+  });
+  // note (append to existing, avoid duplicating)
+  const ta = document.querySelector(`textarea[data-note="${si}"]`);
+  const noteText = ta ? ta.value.trim() : (s.note || "");
+  if(noteText){
+    const prev = String(values[STEP_NOTES_KEY] || "").trim();
+    values[STEP_NOTES_KEY] = prev && !prev.includes(noteText) ? (prev + "\\n" + noteText) : (prev || noteText);
+  }
+  try {
+    await api(`/api/steps/${stepId}`, {method:"PATCH", body: JSON.stringify({values_json: JSON.stringify(values)})});
+    setLocalStep(stepId, {values});
+    const badge = document.getElementById("ai-applied-" + si);
+    if(badge) badge.style.display = "block";
+    renderSteps(steps);
+  } catch(e) {
+    alert("写入失败：" + e.message);
+  }
+}
+
+async function applyAllAi(){
+  if(!aiDraft || !aiDraft.steps) { closeAiPanel(); return; }
+  for(let si = 0; si < aiDraft.steps.length; si++){
+    await applyAiStep(si);
+  }
+  document.getElementById("aiHint").textContent = "已全部写入记录。";
+  document.getElementById("aiHint").style.color = "#2e9e5b";
+  setTimeout(closeAiPanel, 600);
+}
+
 // 语音速记列表定时刷新：等待中的转写完成后自动出现
 setInterval(async () => {
   if(!voiceNotes.some(n => n.status === "pending")) return;
@@ -2332,6 +2462,32 @@ async def upload_voice_audio(
     if status == "pending":
         voice_worker.notify_new_audio()
     return _voice_note_to_dict(note)
+
+
+class AiOrganizeRequest(BaseModel):
+    note_texts: Optional[list[str]] = None
+
+
+@app.get("/api/ai/status")
+def ai_status():
+    from utils.app_settings import get_ai_config
+    cfg = get_ai_config()
+    return {
+        "configured": bool(cfg.get("api_key")),
+        "provider": cfg.get("provider"),
+        "model": cfg.get("model"),
+    }
+
+
+@app.post("/api/experiments/{exp_id}/ai_organize")
+def ai_organize(exp_id: int, body: AiOrganizeRequest):
+    if not db_ops.get_experiment(exp_id):
+        raise HTTPException(404, "Experiment not found")
+    from server import ai_organize as organizer
+    try:
+        return organizer.organize_experiment(exp_id, body.note_texts)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.patch("/api/voice_notes/{note_id}")

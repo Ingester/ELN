@@ -17,6 +17,9 @@ uvicorn[standard]>=0.29.0
 # Sound playback (cross-platform)
 # pygame>=2.5.0    # optional, for mp3 alert sound
 
+# AI 整理语音速记：无需额外依赖（标准库 urllib）。
+#   在「设置 → AI 整理语音速记」里配置 Claude 或 OpenAI 兼容接口的密钥即可。
+
 # Voice-note transcription (语音速记自动转文字)
 # faster-whisper>=1.0  # optional; without it, phone voice memos stay as
 #                        playable audio marked "待转写" (nothing is lost).
