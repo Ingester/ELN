@@ -25,6 +25,8 @@ def _env_int(name: str, default: int) -> int:
 if __name__ == "__main__":
     host = os.environ.get("ELN_WEB_HOST", "0.0.0.0")
     port = _env_int("ELN_WEB_PORT", 8550)
+    api_host = os.environ.get("ELN_API_HOST", "0.0.0.0")
+    api_port = _env_int("ELN_API_PORT", 8000)
 
     os.environ["ELN_WEB_MODE"] = "1"
     os.environ["ELN_DYNAMIC_PUBLIC_URL"] = "1"
@@ -41,11 +43,12 @@ if __name__ == "__main__":
 
     try:
         from server.startup import start_server
-        start_server()
+        start_server(host=api_host, port=api_port)
     except Exception as exc:
         print(f"API server start failed: {exc}", file=sys.stderr)
 
     print(f"Starting ELN Web at http://{host}:{port}")
+    print(f"Starting ELN API at http://{api_host}:{api_port}")
     print(f"iPhone LAN URL: http://{lan_ip}:{port}")
     print("Public URLs are resolved dynamically; restart after switching networks if the current page is already open.")
     print("Set ELN_WEB_OPEN=1 if you want it to open the browser automatically.")

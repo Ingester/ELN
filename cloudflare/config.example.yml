@@ -1,0 +1,10 @@
+# Copy this file to cloudflare/config.yml and replace the placeholders.
+# Do not commit config.yml or the credentials JSON.
+
+tunnel: YOUR_TUNNEL_ID
+credentials-file: C:\Users\YOUR_WINDOWS_USER\.cloudflared\YOUR_TUNNEL_ID.json
+
+ingress:
+  - hostname: eln.example.com
+    service: http://127.0.0.1:8000
+  - service: http_status:404

@@ -4,17 +4,20 @@ All REST endpoints. Runs on Windows as the data host (port 8000).
 """
 
 from __future__ import annotations
+import base64
+import hashlib
+import hmac
 import os
 import json
 import shutil
 import time
 from datetime import datetime, timezone
 from typing import Optional, Any
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -40,6 +43,162 @@ def _photos_dir() -> str:
 def _html_response(content: str, **kwargs) -> HTMLResponse:
     """Return localized HTML for the native web pages."""
     return HTMLResponse(localize_html(content), **kwargs)
+
+
+# ─────────────────────────────────────────────
+# Optional app-level password guard for public tunnels
+# ─────────────────────────────────────────────
+
+def _auth_password() -> str:
+    return os.environ.get("ELN_AUTH_PASSWORD", "")
+
+
+def _auth_cookie_name() -> str:
+    return os.environ.get("ELN_AUTH_COOKIE_NAME", "eln_session")
+
+
+def _auth_cookie_max_age() -> int:
+    try:
+        days = int(os.environ.get("ELN_AUTH_DAYS", "30"))
+    except ValueError:
+        days = 30
+    return max(1, days) * 24 * 60 * 60
+
+
+def _auth_secret() -> bytes:
+    configured = os.environ.get("ELN_AUTH_COOKIE_SECRET", "")
+    seed = configured or f"eln-auth:{_auth_password()}"
+    return hashlib.sha256(seed.encode("utf-8")).digest()
+
+
+def _make_auth_token() -> str:
+    issued = str(int(time.time()))
+    sig = hmac.new(_auth_secret(), issued.encode("utf-8"), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(f"{issued}:{sig}".encode("utf-8")).decode("ascii")
+
+
+def _valid_auth_token(token: str) -> bool:
+    if not token:
+        return False
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode("ascii")).decode("utf-8")
+        issued, sig = decoded.split(":", 1)
+        expected = hmac.new(_auth_secret(), issued.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return False
+        return (time.time() - int(issued)) <= _auth_cookie_max_age()
+    except Exception:
+        return False
+
+
+def _auth_cookie_secure(request: Request) -> bool:
+    setting = os.environ.get("ELN_AUTH_SECURE_COOKIE", "auto").lower()
+    if setting in {"1", "true", "yes", "on"}:
+        return True
+    if setting in {"0", "false", "no", "off"}:
+        return False
+    proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    return proto == "https" or request.url.scheme == "https"
+
+
+def _auth_next_path(request: Request) -> str:
+    path = request.url.path or "/run"
+    if request.url.query:
+        path += f"?{request.url.query}"
+    return path
+
+
+def _wants_html(request: Request) -> bool:
+    accept = request.headers.get("accept", "")
+    return "text/html" in accept or "*/*" in accept
+
+
+def _login_page(next_path: str, error: str = "") -> HTMLResponse:
+    error_html = f'<p class="error">{_html_escape(error)}</p>' if error else ""
+    return _html_response(f"""
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ELN 登录</title>
+  <style>
+    body {{ margin:0; min-height:100vh; display:grid; place-items:center; background:#f7f7f7; color:#222; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+    main {{ width:min(420px, calc(100vw - 32px)); background:#fff; border:1px solid #e8e8e8; border-radius:10px; padding:22px; box-shadow:0 2px 12px #00000012; }}
+    h1 {{ margin:0 0 16px; font-size:22px; }}
+    label {{ display:block; margin:0 0 8px; color:#555; }}
+    input {{ width:100%; font:inherit; padding:12px; border:1px solid #ddd; border-radius:8px; margin-bottom:14px; }}
+    button {{ border:0; border-radius:8px; background:#fb8c00; color:#fff; padding:11px 16px; font:inherit; cursor:pointer; }}
+    .error {{ color:#c62828; }}
+    .hint {{ color:#777; font-size:13px; margin-top:14px; line-height:1.5; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ELN 登录</h1>
+    {error_html}
+    <form method="post" action="/login">
+      <input type="hidden" name="next" value="{_html_escape(next_path)}" />
+      <label for="password">访问密码</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" autofocus />
+      <button type="submit">进入</button>
+    </form>
+    <p class="hint">这个密码由电脑端环境变量 ELN_AUTH_PASSWORD 控制。Cloudflare Tunnel 对外开放时建议同时启用 Cloudflare Access。</p>
+  </main>
+</body>
+</html>
+""")
+
+
+@app.middleware("http")
+async def optional_password_auth(request: Request, call_next):
+    if not _auth_password():
+        return await call_next(request)
+    path = request.url.path
+    if (
+        request.method == "OPTIONS"
+        or path in {"/login", "/logout", "/api/health", "/favicon.ico"}
+    ):
+        return await call_next(request)
+    if _valid_auth_token(request.cookies.get(_auth_cookie_name(), "")):
+        return await call_next(request)
+    if _wants_html(request):
+        return RedirectResponse(f"/login?next={quote(_auth_next_path(request))}", status_code=303)
+    return JSONResponse({"detail": "Authentication required"}, status_code=401)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(next: str = Query("/run")):
+    return _login_page(next)
+
+
+@app.post("/login", response_class=HTMLResponse)
+async def login_submit(request: Request):
+    body = (await request.body()).decode("utf-8", errors="replace")
+    parsed = parse_qs(body, keep_blank_values=True)
+    password = parsed.get("password", [""])[0]
+    next_path = parsed.get("next", ["/run"])[0] or "/run"
+    if not next_path.startswith("/"):
+        next_path = "/run"
+    if not _auth_password() or not hmac.compare_digest(password, _auth_password()):
+        return _login_page(next_path, "密码不正确")
+    response = RedirectResponse(next_path, status_code=303)
+    response.set_cookie(
+        _auth_cookie_name(),
+        _make_auth_token(),
+        max_age=_auth_cookie_max_age(),
+        httponly=True,
+        secure=_auth_cookie_secure(request),
+        samesite="lax",
+    )
+    return response
+
+
+@app.get("/logout")
+def logout():
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(_auth_cookie_name())
+    return response
 
 
 # Mount static photo files
@@ -1397,8 +1556,20 @@ function esc(v){ return String(v ?? "").replace(/[&<>"']/g, s => ({'&':'&amp;','
 window.addEventListener("online", syncNow);
 setInterval(syncNow, 15000);
 setInterval(refreshTimers, 1000);
+function applyBackTarget(){
+  const link = document.getElementById("backToFlet");
+  if(!link) return;
+  const localHosts = ["127.0.0.1", "localhost", "::1"];
+  const isLan = /^192\\.168\\.|^10\\.|^172\\.(1[6-9]|2\\d|3[0-1])\\./.test(location.hostname);
+  if(location.protocol === "https:" || (!localHosts.includes(location.hostname) && !isLan)){
+    link.href = "/run";
+    link.textContent = "实验列表";
+  } else {
+    link.href = `${location.protocol}//${location.hostname}:8550/`;
+  }
+}
 renderQueueInfo();
-document.getElementById("backToFlet").href = `${location.protocol}//${location.hostname}:8550/`;
+applyBackTarget();
 loadExperiments();
 </script>
 </body>
@@ -1919,7 +2090,10 @@ def web_open_experiment(exp_id: int):
     exp = db_ops.get_experiment(exp_id)
     if not exp:
         raise HTTPException(404, "Experiment not found")
-    target = f"{_web_base_url()}/stepper/{exp_id}?t={int(time.time())}"
+    if os.environ.get("ELN_NATIVE_ONLY") == "1":
+        target = f"/run?experiment_id={exp_id}&t={int(time.time())}"
+    else:
+        target = f"{_web_base_url()}/stepper/{exp_id}?t={int(time.time())}"
     return _html_response(f"""
 <!doctype html>
 <html lang="zh-CN">
@@ -2165,10 +2339,14 @@ def _render_markdown_html(markdown: str) -> str:
 
 
 def _eln_step_url(experiment_id: int, step_id: int) -> str:
+    if os.environ.get("ELN_NATIVE_ONLY") == "1":
+        return f"/run?experiment_id={experiment_id}"
     return f"{_web_base_url()}/stepper/{experiment_id}/{step_id}"
 
 
 def _web_base_url() -> str:
+    if os.environ.get("ELN_NATIVE_ONLY") == "1":
+        return os.environ.get("ELN_NATIVE_PUBLIC_URL", "").rstrip("/") or "/run"
     configured = "" if os.environ.get("ELN_DYNAMIC_PUBLIC_URL") == "1" else os.environ.get("ELN_WEB_PUBLIC_URL", "").rstrip("/")
     if configured:
         return configured
@@ -2501,8 +2679,12 @@ def run_report_page(
     hostname = request.url.hostname or "127.0.0.1"
     display_host = f"[{hostname}]" if ":" in hostname else hostname
     if return_to == "history":
-        back_url = f"{request.url.scheme}://{display_host}:8550/history"
-        back_label = "返回历史"
+        if os.environ.get("ELN_NATIVE_ONLY") == "1" or request.url.scheme == "https":
+            back_url = "/run"
+            back_label = "返回实验列表"
+        else:
+            back_url = f"{request.url.scheme}://{display_host}:8550/history"
+            back_label = "返回历史"
     else:
         back_url = f"/run?experiment_id={exp_id}"
         back_label = "返回实验"
