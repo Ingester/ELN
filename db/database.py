@@ -206,6 +206,17 @@ CREATE TABLE IF NOT EXISTS storage_items (
     registered_at   TEXT
 );
 
+CREATE TABLE IF NOT EXISTS voice_notes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id   INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    step_id         INTEGER,
+    text            TEXT    NOT NULL DEFAULT '',
+    audio_path      TEXT    DEFAULT '',
+    status          TEXT    NOT NULL DEFAULT 'done',
+    created_at      TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_notes_experiment ON voice_notes(experiment_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_steps_experiment ON steps(experiment_id, step_index);
 CREATE INDEX IF NOT EXISTS idx_timers_experiment ON timers(experiment_id);
 CREATE INDEX IF NOT EXISTS idx_timer_events_step ON timer_events(experiment_id, step_id, created_at);
@@ -715,6 +726,68 @@ def list_timer_events(experiment_id: int) -> list[dict[str, Any]]:
 
 
 # ─────────────────────────────────────────────
+# Voice notes CRUD
+# ─────────────────────────────────────────────
+# status: 'done' 已有文字 / 'pending' 等待转写 / 'audio_only' 只有录音
+
+def create_voice_note(experiment_id: int, text: str = "", step_id: Optional[int] = None,
+                      audio_path: str = "", status: str = "done") -> dict[str, Any]:
+    with db_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO voice_notes (experiment_id, step_id, text, audio_path, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (experiment_id, step_id, text or "", audio_path or "", status, _now()),
+        )
+        note_id = cur.lastrowid
+    return get_voice_note(note_id)
+
+
+def get_voice_note(note_id: int) -> Optional[dict[str, Any]]:
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM voice_notes WHERE id = ?", (note_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_voice_notes(experiment_id: int) -> list[dict[str, Any]]:
+    with db_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM voice_notes WHERE experiment_id = ? ORDER BY created_at, id",
+            (experiment_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_pending_voice_notes() -> list[dict[str, Any]]:
+    """Notes with audio waiting for transcription (for the background worker)."""
+    with db_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM voice_notes WHERE status = 'pending' AND audio_path != '' ORDER BY id"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_voice_note(note_id: int, **kwargs) -> Optional[dict[str, Any]]:
+    allowed = {"text", "step_id", "status", "audio_path"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if updates:
+        sets = ", ".join(f"{k} = ?" for k in updates)
+        with db_conn() as conn:
+            conn.execute(
+                f"UPDATE voice_notes SET {sets} WHERE id = ?",
+                (*updates.values(), note_id),
+            )
+    return get_voice_note(note_id)
+
+
+def delete_voice_note(note_id: int) -> bool:
+    with db_conn() as conn:
+        cur = conn.execute("DELETE FROM voice_notes WHERE id = ?", (note_id,))
+        return cur.rowcount > 0
+
+
+# ─────────────────────────────────────────────
 # Protocols CRUD
 # ─────────────────────────────────────────────
 
@@ -990,7 +1063,8 @@ def get_report(exp_id: int) -> str:
     storage_items = get_storage_items(exp_id)
     boxes = {b.id: b for b in list_boxes()}
     timer_events = list_timer_events(exp_id)
-    return generate_report(exp, steps, storage_items, boxes, timer_events)
+    voice_notes = list_voice_notes(exp_id)
+    return generate_report(exp, steps, storage_items, boxes, timer_events, voice_notes)
 
 
 def save_report(exp_id: int) -> dict[str, str]:

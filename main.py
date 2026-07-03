@@ -131,6 +131,78 @@ def main(page: ft.Page) -> None:
     tm.restore_from_db()
     tm.start()
 
+    # ── Global timer bar（每一页可见的计时条）─────
+    import threading
+
+    timer_bar = ft.Container(
+        visible=False,
+        padding=ft.padding.symmetric(6, 10),
+        margin=ft.margin.only(left=10, right=10, top=8),
+    )
+    _timer_bar_stop = threading.Event()
+
+    def _fmt_bar_secs(sec: int) -> str:
+        sec = max(0, int(sec or 0))
+        h, rem = divmod(sec, 3600)
+        m, s = divmod(rem, 60)
+        core = f"{m:02d}:{s:02d}"
+        return f"{h}:{core}" if h else core
+
+    def _build_timer_chip(state) -> ft.Container:
+        over = state.status == "overtime"
+        step = None
+        try:
+            step = db_local.get_step(state.step_id)
+        except Exception:
+            pass
+        title = step.title if step else f"Step {state.step_id}"
+        label = ("+" if over else "") + _fmt_bar_secs(state.display_seconds)
+        eid, sid = state.experiment_id, state.step_id
+        return ft.Container(
+            content=ft.Row([
+                ft.Icon(ft.Icons.TIMER, size=14, color=ft.Colors.WHITE),
+                ft.Text(f"{label} · {title}", size=12.5, color=ft.Colors.WHITE,
+                        weight=ft.FontWeight.W_600, no_wrap=True),
+            ], spacing=5, tight=True),
+            bgcolor=ft.Colors.RED_600 if over else ft.Colors.BLUE_GREY_900,
+            border_radius=999,
+            padding=ft.padding.symmetric(6, 12),
+            on_click=lambda e: _navigate(ROUTE_STEPPER,
+                                         {"experiment_id": eid, "step_id": sid}),
+            tooltip=f"{title} · 点击打开该步骤",
+        )
+
+    def _refresh_timer_bar() -> None:
+        try:
+            states = [s for s in tm.get_all_states() if s.is_active]
+        except Exception:
+            states = []
+        if not states:
+            if timer_bar.visible:
+                timer_bar.visible = False
+                try:
+                    page.update()
+                except Exception:
+                    pass
+            return
+        timer_bar.content = ft.Row(
+            [_build_timer_chip(s) for s in states],
+            wrap=True, spacing=6, run_spacing=6,
+        )
+        timer_bar.visible = True
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    def _timer_bar_loop() -> None:
+        while not _timer_bar_stop.is_set():
+            _refresh_timer_bar()
+            _timer_bar_stop.wait(1.0)
+
+    threading.Thread(target=_timer_bar_loop, daemon=True,
+                     name="eln-timer-bar").start()
+
     # ── Navigation state ─────────────────────────
     _current_tab: list[str] = [ROUTE_HOME]
     _nav_params: list[dict] = [{}]
@@ -403,13 +475,14 @@ def main(page: ft.Page) -> None:
         _refresh_nav_language[0] = _refresh_desktop_nav_language
 
     # ── Page layout ──────────────────────────────
+    content_column = ft.Column([timer_bar, content_area], expand=True, spacing=0)
     if IS_MOBILE:
-        page.add(content_area)
+        page.add(content_column)
     else:
         layout_row = ft.Row([
             rail,
             ft.VerticalDivider(width=1, color=ft.Colors.GREY_200),
-            content_area,
+            content_column,
         ], expand=True, spacing=0)
         _layout_row_ref[0] = layout_row
         page.add(layout_row)
@@ -426,6 +499,7 @@ def main(page: ft.Page) -> None:
 
     # ── Cleanup on close ─────────────────────────
     def _on_disconnect(_):
+        _timer_bar_stop.set()
         tm.stop()
         if IS_WINDOWS and os.environ.get("ELN_WEB_MODE") != "1":
             try:

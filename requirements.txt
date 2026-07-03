@@ -17,5 +17,11 @@ uvicorn[standard]>=0.29.0
 # Sound playback (cross-platform)
 # pygame>=2.5.0    # optional, for mp3 alert sound
 
+# Voice-note transcription (语音速记自动转文字)
+# faster-whisper>=1.0  # optional; without it, phone voice memos stay as
+#                        playable audio marked "待转写" (nothing is lost).
+#   install:  python -m pip install faster-whisper
+#   model:    set ELN_WHISPER_MODEL=base|small|medium (default small)
+
 # Standard library only — no extra deps needed for:
 # sqlite3, json, threading, platform, re, datetime

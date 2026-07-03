@@ -20,6 +20,7 @@ def generate_report(
     storage_items: list[StorageItem],
     boxes: dict[int, Box],
     timer_events: list[dict] | None = None,
+    voice_notes: list[dict] | None = None,
 ) -> str:
     """Return a complete Markdown report string."""
     lines: list[str] = []
@@ -58,8 +59,27 @@ def generate_report(
         except Exception:
             pass
 
+    notes_by_step: dict[int, list[dict]] = {}
+    loose_notes: list[dict] = []
+    for note in voice_notes or []:
+        step_id = note.get("step_id")
+        if step_id:
+            notes_by_step.setdefault(int(step_id), []).append(note)
+        else:
+            loose_notes.append(note)
+
     for step in steps:
-        lines.extend(_render_step(step, events_by_step.get(step.id, [])))
+        lines.extend(_render_step(step, events_by_step.get(step.id, []),
+                                  notes_by_step.get(step.id, [])))
+
+    # ── Voice notes not attached to a step ───────
+    if loose_notes:
+        lines.append("---")
+        lines.append("")
+        lines.append("## 语音速记（未关联步骤）")
+        lines.append("")
+        lines.extend(_render_voice_notes(loose_notes))
+        lines.append("")
 
     # ── Storage table ────────────────────────────
     if storage_items:
@@ -104,7 +124,20 @@ def generate_report(
 # Step rendering
 # ─────────────────────────────────────────────
 
-def _render_step(step: Step, timer_events: list[dict] | None = None) -> list[str]:
+def _render_voice_notes(notes: list[dict]) -> list[str]:
+    lines: list[str] = []
+    for note in notes:
+        stamp = _fmt_dt(note.get("created_at"))
+        text = str(note.get("text") or "").strip()
+        if text:
+            lines.append(f"- 🎤 {stamp}：{text}")
+        elif note.get("audio_path"):
+            lines.append(f"- 🎤 {stamp}：录音待转写（`{note['audio_path']}`）")
+    return lines
+
+
+def _render_step(step: Step, timer_events: list[dict] | None = None,
+                 voice_notes: list[dict] | None = None) -> list[str]:
     lines: list[str] = []
     status_icon = "✅" if step.completed_at else "⬜"
     lines.append(f"### {status_icon} Step {step.step_index + 1} · {step.title}")
@@ -151,6 +184,12 @@ def _render_step(step: Step, timer_events: list[dict] | None = None) -> list[str
         lines.append("**备注**：")
         lines.append("")
         lines.append(notes)
+        lines.append("")
+
+    if voice_notes:
+        lines.append("**语音速记**：")
+        lines.append("")
+        lines.extend(_render_voice_notes(voice_notes))
         lines.append("")
 
     # Timer info

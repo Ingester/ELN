@@ -55,6 +55,13 @@ def start_server(host: str = "0.0.0.0", port: int = 8000) -> None:
     _server_thread.start()
     logger.info(f"ELN API server started on http://{host}:{port}")
 
+    # Voice-note transcription worker (no-op unless faster-whisper is installed)
+    try:
+        from server.voice import notify_new_audio
+        notify_new_audio()
+    except Exception as exc:
+        logger.warning(f"voice worker not started: {exc}")
+
 
 def stop_server() -> None:
     """Signal uvicorn to shut down."""

@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 import db.database as db_ops
 from db.models import ProtocolDefinition
+from server import web_ui
 from utils.report_generator import generate_report
 from utils.i18n import localize_html
 
@@ -113,29 +114,28 @@ def _wants_html(request: Request) -> bool:
     return "text/html" in accept or "*/*" in accept
 
 
+_LOGIN_CSS = """
+    body { min-height:100vh; display:grid; place-items:center; padding-bottom:0; }
+    main { width:min(420px, calc(100vw - 32px)); background:var(--card); border:1px solid var(--line);
+           border-radius:18px; padding:26px; box-shadow:var(--shadow); }
+    h1 { margin:0 0 4px; font-size:22px; }
+    .sub { color:var(--muted); font-size:13.5px; margin:0 0 18px; }
+    label { display:block; margin:0 0 8px; }
+    input { margin-bottom:14px; }
+    .error { color:#b13232; font-weight:600; }
+    .hint { color:var(--muted); font-size:13px; margin-top:14px; line-height:1.5; }
+"""
+
+
 def _login_page(next_path: str, error: str = "") -> HTMLResponse:
     error_html = f'<p class="error">{_html_escape(error)}</p>' if error else ""
+    head = web_ui.page_head("ELN 登录", _LOGIN_CSS)
     return _html_response(f"""
-<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ELN 登录</title>
-  <style>
-    body {{ margin:0; min-height:100vh; display:grid; place-items:center; background:#f7f7f7; color:#222; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
-    main {{ width:min(420px, calc(100vw - 32px)); background:#fff; border:1px solid #e8e8e8; border-radius:10px; padding:22px; box-shadow:0 2px 12px #00000012; }}
-    h1 {{ margin:0 0 16px; font-size:22px; }}
-    label {{ display:block; margin:0 0 8px; color:#555; }}
-    input {{ width:100%; font:inherit; padding:12px; border:1px solid #ddd; border-radius:8px; margin-bottom:14px; }}
-    button {{ border:0; border-radius:8px; background:#fb8c00; color:#fff; padding:11px 16px; font:inherit; cursor:pointer; }}
-    .error {{ color:#c62828; }}
-    .hint {{ color:#777; font-size:13px; margin-top:14px; line-height:1.5; }}
-  </style>
-</head>
+{head}
 <body>
   <main>
-    <h1>ELN 登录</h1>
+    <h1>🧪 ELN 实验记录</h1>
+    <p class="sub">输入访问密码继续</p>
     {error_html}
     <form method="post" action="/login">
       <input type="hidden" name="next" value="{_html_escape(next_path)}" />
@@ -298,6 +298,16 @@ class StorageCreate(BaseModel):
     default_box: str = ""
 
 
+class VoiceNoteCreate(BaseModel):
+    text: str
+    step_id: Optional[int] = None
+
+
+class VoiceNoteUpdate(BaseModel):
+    text: Optional[str] = None
+    step_id: Optional[int] = None
+
+
 # ─────────────────────────────────────────────
 # Health check
 # ─────────────────────────────────────────────
@@ -311,104 +321,149 @@ def health():
 # Native web experiment runner
 # ─────────────────────────────────────────────
 
-@app.get("/run", response_class=HTMLResponse)
-@app.get("/mobile", response_class=HTMLResponse)
-def experiment_runner(experiment_id: Optional[int] = Query(None)):
-    return _html_response("""
-<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>ELN 实验执行</title>
-  <style>
-    :root { color-scheme: light; --orange:#fb8c00; --green:#43a047; --line:#e8e8e8; --text:#222; --muted:#777; }
-    * { box-sizing: border-box; }
-    body { margin:0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:var(--text); background:#f7f7f7; }
-    header { position:sticky; top:0; z-index:3; background:#fff; border-bottom:1px solid var(--line); padding:12px 14px; display:flex; gap:10px; align-items:center; }
-    h1 { margin:0; font-size:18px; flex:1; }
-    main { max-width: 980px; margin:0 auto; padding:12px; }
-    button, label.button, a.button, select, input, textarea { font: inherit; }
-    button, label.button, a.button { border:0; border-radius:8px; background:var(--orange); color:#fff; padding:10px 14px; display:inline-block; text-decoration:none; cursor:pointer; }
-    button.secondary, label.secondary { background:#eee; color:#333; }
-    button.green { background:var(--green); }
-    button:disabled { background:#bbb; }
+_RUNNER_CSS = """
+    header.app-bar .icon-btn {
+      min-height:40px; min-width:40px; padding:6px 10px; border-radius:11px;
+      background:#f1efeb; color:#43413d; box-shadow:none; font-size:17px; font-weight:600;
+      display:inline-flex; align-items:center; justify-content:center; text-decoration:none;
+    }
+    .exp-wrap { flex:1; min-width:0; }
+    .exp-wrap select {
+      border:0; background:transparent; font-weight:700; font-size:16px;
+      padding:6px 4px; min-height:40px; width:100%;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    .exp-wrap select:focus { box-shadow:none; }
     .status { font-size:12px; color:var(--muted); }
-    .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px; margin:12px 0; box-shadow:0 1px 3px #0000000f; }
-    .stepper { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:10px 0; }
-    .stepper button { min-width:70px; }
-    .progress { flex:1; height:6px; border-radius:999px; background:#e7e7e7; overflow:hidden; }
-    .progress > div { height:100%; background:var(--orange); transition:width .2s ease; }
-    .step-title { font-size:18px; font-weight:700; margin:4px 0 8px; }
-    .desc { line-height:1.55; color:#333; }
+    #net { font-size:12px; font-weight:600; white-space:nowrap; }
+    .queue-info { color:var(--muted); font-size:12.5px; margin:2px 4px 8px; min-height:0; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:16px; margin:0 0 14px; box-shadow:var(--shadow); }
+
+    .chips { display:flex; gap:7px; overflow-x:auto; padding:2px 2px 10px; scrollbar-width:none; }
+    .chips::-webkit-scrollbar { display:none; }
+    .chip {
+      flex:0 0 auto; min-width:34px; min-height:34px; padding:0 6px; border-radius:999px;
+      background:#efece7; color:#7a756d; font-weight:700; font-size:13.5px; box-shadow:none;
+    }
+    .chip.done { background:var(--green-soft); color:#1d6f3f; }
+    .chip.cur { background:linear-gradient(180deg,#f28118,var(--accent-strong)); color:#fff; box-shadow:0 1px 4px rgba(208,94,0,.4); }
+
+    .stepper { display:flex; align-items:center; gap:12px; margin:2px 0 10px; }
+    .stepper button { min-width:76px; min-height:38px; }
+    .progress { flex:1; height:7px; border-radius:999px; background:#eceae4; overflow:hidden; }
+    .progress > div { height:100%; border-radius:999px; background:linear-gradient(90deg,#f5a34c,var(--accent)); transition:width .25s ease; }
+
+    .step-title { font-size:20px; font-weight:800; line-height:1.3; margin:2px 0 4px; letter-spacing:.01em; }
+    .desc { line-height:1.65; color:#3c3934; font-size:15px; }
     .desc p { margin:0 0 10px; }
-    .desc h1, .desc h2, .desc h3 { margin:14px 0 8px; line-height:1.25; }
-    .desc h1 { font-size:22px; }
-    .desc h2 { font-size:19px; }
-    .desc h3 { font-size:16px; }
-    .desc ul, .desc ol { margin:8px 0 10px 24px; padding:0; }
+    .desc h1, .desc h2, .desc h3 { margin:14px 0 8px; line-height:1.25; color:var(--ink); }
+    .desc h1 { font-size:20px; } .desc h2 { font-size:17px; } .desc h3 { font-size:15.5px; }
+    .desc ul, .desc ol { margin:8px 0 10px 22px; padding:0; }
+    .desc li { margin-bottom:3px; }
     .desc table { border-collapse:collapse; width:100%; margin:10px 0; font-size:14px; }
     .desc th, .desc td { border:1px solid var(--line); padding:7px 9px; vertical-align:top; }
-    .desc th { background:#fafafa; font-weight:700; }
-    .desc code { background:#f3f3f3; border-radius:4px; padding:1px 4px; }
-    .desc pre { background:#f6f6f6; border:1px solid var(--line); border-radius:8px; padding:10px; overflow:auto; }
-    .desc blockquote { border-left:4px solid #ddd; margin:8px 0; padding:3px 12px; color:#555; }
+    .desc th { background:#faf8f4; font-weight:700; }
+    .desc code { background:#f3f0ea; border-radius:5px; padding:1px 5px; font-size:.92em; }
+    .desc pre { background:#f8f6f1; border:1px solid var(--line); border-radius:10px; padding:10px; overflow:auto; }
+    .desc blockquote { border-left:3px solid var(--accent); margin:8px 0; padding:3px 12px; color:#6b665e; background:var(--accent-soft); border-radius:0 8px 8px 0; }
+
     .field { margin-top:12px; }
-    .field label { display:block; color:#555; font-size:13px; margin-bottom:5px; }
-    .field input, .field select, .field textarea { width:100%; border:1px solid #ddd; border-radius:8px; padding:11px; background:#fff; }
-    .field textarea { min-height:180px; resize:vertical; }
-    .notes textarea { min-height:92px; }
-    .actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px; }
+    .field label { display:block; margin-bottom:5px; }
+    .field textarea { min-height:150px; }
+    .notes textarea { min-height:88px; }
     .done { color:var(--green); font-weight:700; }
-    .warn { color:#d98200; }
-    .photo-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+
+    .photo-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+    .photo-row .button, .photo-row button { min-height:38px; padding:7px 13px; font-size:14px; }
+    .photo-row input[type=text] { flex:1; min-width:150px; }
     input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
-    .photos { display:grid; grid-template-columns:repeat(auto-fill, minmax(170px, 220px)); gap:12px; align-items:start; }
-    .photos a { color:var(--orange); }
+    .photos { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; align-items:start; }
+    .photos a { color:var(--accent-strong); }
     .attachment-item { display:flex; align-items:center; gap:6px; min-width:0; }
-    .attachment-item.file { min-height:42px; border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
-    .attachment-item.file a { min-width:0; overflow-wrap:anywhere; }
-    .attachment-item.image { display:grid; gap:6px; }
-    .attachment-preview { display:block; width:100%; aspect-ratio:4 / 3; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:#f7f7f7; }
-    .attachment-preview img { display:block; width:100%; height:100%; object-fit:contain; }
+    .attachment-item.file { min-height:42px; border:1px solid var(--line); border-radius:10px; padding:8px 10px; background:#fbfaf7; }
+    .attachment-item.file a { min-width:0; overflow-wrap:anywhere; font-size:13.5px; }
+    .attachment-item.image { display:grid; gap:5px; }
+    .attachment-preview { display:block; width:100%; aspect-ratio:4/3; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:#f3f1ec; }
+    .attachment-preview img { display:block; width:100%; height:100%; object-fit:cover; }
     .attachment-caption { display:flex; align-items:center; gap:4px; min-width:0; }
-    .attachment-caption > a { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .attachment-rename { width:28px; height:28px; padding:0; border-radius:6px; background:transparent; color:var(--orange); font-size:19px; line-height:1; }
-    .attachment-rename:hover { background:#fff2e2; }
-    .small { color:var(--muted); font-size:12px; }
-    .timer { border:1px solid #ffd8a8; background:#fff8ef; border-radius:10px; padding:12px; margin-top:12px; }
-    .timer-display { font-size:32px; font-weight:800; color:var(--orange); letter-spacing:0; }
-    .timer-edit { display:flex; gap:8px; align-items:end; }
-    .timer-edit input { width:120px; }
-    .timer.over { background:#fff0f0; border-color:#ffc7c7; }
-    .timer.over .timer-display { color:#d32f2f; }
-    .section-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:14px; }
-    .section-head h2 { margin:0; font-size:15px; color:#555; font-weight:600; }
-    .edit-link { background:transparent; color:var(--orange); padding:3px 0; border-radius:0; }
-    .wrapup { border:1px solid #cfe8d4; background:#f2fbf4; border-radius:10px; padding:12px; margin-top:14px; }
-    .modal-backdrop { position:fixed; inset:0; z-index:20; display:none; align-items:center; justify-content:center; background:#00000033; padding:18px; }
+    .attachment-caption > a { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+    .attachment-rename { width:28px; height:28px; min-height:28px; padding:0; border-radius:7px; background:transparent; color:var(--accent-strong); font-size:16px; box-shadow:none; }
+
+    .timer { border:1px solid #f6ddba; background:linear-gradient(180deg,#fff9f0,#fdf3e3); border-radius:var(--radius); padding:14px; margin-top:14px; }
+    .timer-display { font-size:40px; font-weight:800; color:var(--accent-strong); font-variant-numeric:tabular-nums; line-height:1.1; }
+    .timer-edit { display:flex; gap:8px; align-items:center; margin-top:6px; }
+    .timer-edit input { width:110px; }
+    .timer.over { background:linear-gradient(180deg,#fdf0f0,#fbe4e4); border-color:#f0bcbc; }
+    .timer.over .timer-display { color:var(--red); }
+    .timer .actions { margin-top:10px; }
+    .timer .actions button { min-height:40px; min-width:72px; }
+
+    .section-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:16px; }
+    .section-head h2 { margin:0; font-size:13px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.06em; }
+    .edit-link { background:transparent; color:var(--accent-strong); box-shadow:none; min-height:30px; padding:2px 6px; font-size:13px; font-weight:600; }
+    .wrapup { border:1px solid #cbe7d3; background:linear-gradient(180deg,#f4fbf6,#e9f7ee); border-radius:var(--radius); padding:14px; margin-top:16px; }
+
+    .main-actions { position:sticky; bottom:calc(10px + env(safe-area-inset-bottom,0px)); margin-top:18px; display:flex; gap:10px; align-items:center; background:rgba(255,255,255,.92); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border:1px solid var(--line); border-radius:14px; padding:10px; box-shadow:0 6px 24px rgba(31,35,40,.12); }
+    .main-actions button { flex:1; min-height:46px; }
+    .main-actions .status { flex-basis:100%; text-align:center; }
+
+    .modal-backdrop { position:fixed; inset:0; z-index:70; display:none; align-items:center; justify-content:center; background:rgba(20,18,15,.4); padding:18px; }
     .modal-backdrop.open { display:flex; }
-    .modal { width:min(720px, 100%); max-height:90vh; overflow:auto; background:#fff; border-radius:12px; padding:16px; box-shadow:0 12px 36px #0000002e; }
-    .modal h2 { margin:0 0 12px; font-size:18px; }
-    .modal textarea, .modal input { width:100%; border:1px solid #ddd; border-radius:8px; padding:10px; }
-  </style>
-</head>
+    .modal { width:min(720px,100%); max-height:88vh; overflow:auto; background:#fff; border-radius:18px; padding:18px; box-shadow:0 18px 50px rgba(0,0,0,.25); }
+    .modal h2 { margin:0 0 12px; font-size:17px; }
+    .modal textarea { min-height:200px; }
+
+    /* Voice notes */
+    .voice-list { display:grid; gap:8px; margin-top:10px; }
+    .voice-note { display:flex; gap:10px; align-items:flex-start; background:#fbfaf7; border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
+    .voice-note .vtime { flex:0 0 auto; font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; padding-top:2px; }
+    .voice-note .vbody { flex:1; min-width:0; font-size:14.5px; overflow-wrap:anywhere; }
+    .voice-note .vbody audio { width:100%; margin-top:4px; }
+    .voice-note .vtag { display:inline-block; font-size:11.5px; font-weight:700; color:#9a6a00; background:#fff3d6; border-radius:6px; padding:1px 7px; margin-left:6px; }
+    .voice-note .vops { flex:0 0 auto; display:flex; gap:2px; }
+    .voice-note .vops button { min-height:28px; min-width:28px; padding:0; background:transparent; box-shadow:none; color:var(--muted); font-size:14px; }
+
+    #micBtn {
+      position:fixed; right:14px; bottom:calc(16px + env(safe-area-inset-bottom,0px)); z-index:60;
+      width:58px; height:58px; border-radius:999px; font-size:25px; padding:0;
+      background:linear-gradient(180deg,#f28118,var(--accent-strong));
+      box-shadow:0 6px 22px rgba(208,94,0,.45);
+    }
+    #micBtn.rec { background:linear-gradient(180deg,#e05555,#c62828); animation:elnMicPulse 1.1s ease infinite; }
+    @keyframes elnMicPulse { 50% { transform:scale(1.07); box-shadow:0 6px 26px rgba(198,40,40,.55); } }
+
+    .sheet-backdrop { position:fixed; inset:0; z-index:65; display:none; background:rgba(20,18,15,.4); }
+    .sheet-backdrop.open { display:block; }
+    .sheet {
+      position:fixed; left:0; right:0; bottom:0; z-index:66; display:none;
+      background:#fff; border-radius:20px 20px 0 0; box-shadow:0 -10px 40px rgba(0,0,0,.25);
+      padding:16px 16px calc(16px + env(safe-area-inset-bottom,0px));
+      max-height:82vh; overflow:auto; max-width:720px; margin:0 auto;
+    }
+    .sheet.open { display:block; }
+    .sheet h2 { font-size:16px; margin:0 0 4px; }
+    .sheet .grab { width:40px; height:4px; border-radius:99px; background:#ddd8d0; margin:0 auto 12px; }
+    #voiceLive { min-height:22px; color:var(--accent-strong); font-size:14px; margin:8px 0 2px; }
+    #voiceText { min-height:96px; margin-top:6px; }
+    .voice-controls { display:flex; gap:10px; align-items:center; margin-top:10px; }
+    .voice-controls button { flex:1; min-height:46px; }
+    #voiceRecBtn.rec { background:linear-gradient(180deg,#e05555,#c62828); }
+    .voice-all { margin-top:16px; }
+"""
+
+_RUNNER_BODY = """
 <body>
-  <header>
-    <h1>ELN 实验执行</h1>
+  <header class="app-bar">
+    <a class="icon-btn" id="backToFlet" href="/" aria-label="返回首页">🏠</a>
+    <div class="exp-wrap">
+      <select id="experimentSelect" onchange="selectExperiment(this.value)" aria-label="选择实验"></select>
+    </div>
     <span id="net" class="status">连接中</span>
-    <button class="secondary" onclick="syncCurrentAndNow()">同步</button>
+    <button class="icon-btn" onclick="loadExperiments()" title="刷新" aria-label="刷新">⟳</button>
+    <button class="icon-btn" onclick="syncCurrentAndNow()" title="同步" aria-label="同步">↑</button>
   </header>
   <main>
-    <section class="card">
-      <div class="small">原生 Web 执行页。记录会先保存在本机浏览器缓存，联网时同步回电脑数据库。</div>
-      <div class="actions">
-        <a class="button secondary" id="backToFlet" href="/">返回首页</a>
-        <select id="experimentSelect" onchange="selectExperiment(this.value)"></select>
-        <button onclick="loadExperiments()">刷新实验</button>
-      </div>
-      <div id="queueInfo" class="status"></div>
-    </section>
+    <div id="queueInfo" class="queue-info"></div>
     <section id="steps"></section>
   </main>
   <div id="modalBackdrop" class="modal-backdrop">
@@ -420,6 +475,24 @@ def experiment_runner(experiment_id: Optional[int] = Query(None)):
         <button class="secondary" onclick="closeModal()">取消</button>
       </div>
       <div id="modalStatus" class="status"></div>
+    </div>
+  </div>
+
+  <button id="micBtn" onclick="openVoicePanel()" title="语音速记" aria-label="语音速记">🎤</button>
+  <div id="voiceBackdrop" class="sheet-backdrop" onclick="closeVoicePanel()"></div>
+  <div id="voiceSheet" class="sheet">
+    <div class="grab"></div>
+    <h2>🎤 语音速记</h2>
+    <div class="small" id="voiceHint"></div>
+    <div id="voiceLive"></div>
+    <textarea id="voiceText" placeholder="说完的内容出现在这里，可以先修改再保存"></textarea>
+    <div class="voice-controls">
+      <button id="voiceRecBtn" onclick="toggleVoiceRec()">开始说话</button>
+      <button class="green" onclick="saveVoiceText()">存入当前步骤</button>
+    </div>
+    <div class="voice-all">
+      <div class="section-head" style="margin-top:0"><h2>本实验全部速记</h2></div>
+      <div id="voiceAllList" class="voice-list"></div>
     </div>
   </div>
 
@@ -437,8 +510,10 @@ const LS = {
 };
 
 let selectedExperiment = new URLSearchParams(window.location.search).get("experiment_id") || localStorage.getItem(LS.selected) || "";
+let focusStepIdParam = new URLSearchParams(window.location.search).get("step_id") || "";
 let steps = [];
 let experiments = [];
+let voiceNotes = [];
 const STEP_NOTES_KEY = "__eln_step_notes";
 const timerSync = {};
 const timerLastSync = {};
@@ -460,7 +535,7 @@ function draftKey(stepId){ return LS.draftsPrefix + stepId; }
 function descKey(stepId){ return LS.descPrefix + stepId; }
 function timerKey(stepId){ return LS.timerPrefix + stepId; }
 function net(text, ok=true){ const el=document.getElementById("net"); el.textContent=text; el.style.color=ok ? "#43a047" : "#d98200"; }
-function renderQueueInfo(){ document.getElementById("queueInfo").textContent = "待同步：" + getQueue().length + " 项"; }
+function renderQueueInfo(){ const n = getQueue().length; document.getElementById("queueInfo").textContent = n ? ("待同步：" + n + " 项") : ""; }
 
 async function api(path, opts={}){
   const res = await fetch(path, {headers: {"Content-Type":"application/json", ...(opts.headers||{})}, ...opts});
@@ -520,7 +595,13 @@ async function loadSteps(expId){
     net("离线缓存", false);
   }
   await restoreTimersFromServer(expId);
+  await loadVoiceNotes();
   ensureInitialStepPosition(expId);
+  if(focusStepIdParam){
+    const fi = steps.findIndex(s => String(s.id) === String(focusStepIdParam));
+    if(fi >= 0) setCurrentStepIndex(fi);
+    focusStepIdParam = "";
+  }
   renderSteps(steps);
 }
 
@@ -742,19 +823,25 @@ function renameAttachment(button){
   );
 }
 
+function jumpStep(i){ setCurrentStepIndex(i); renderSteps(steps); }
+
 function renderSteps(items){
   const root = document.getElementById("steps");
   root.innerHTML = "";
-  if(!items.length){ root.innerHTML = '<div class="card small">暂无缓存步骤。联网后点“刷新实验”。</div>'; return; }
+  if(!items.length){ root.innerHTML = '<div class="card small">暂无缓存步骤。联网后点右上角 ⟳ 刷新。</div>'; return; }
   steps = items;
   const idx = currentStepIndex();
   const step = items[idx];
-  const pct = Math.round(((idx + 1) / items.length) * 100);
+  const doneCount = items.filter(s => s.completed_at).length;
+  const pct = Math.round((doneCount / items.length) * 100);
   const vals = mergedValues(step);
   const totalSeconds = mergedTimerSeconds(step);
   const isLast = idx >= items.length - 1;
   const card = document.createElement("article");
   card.className = "card";
+  const chips = items.map((s, i) =>
+    `<button class="chip ${s.completed_at ? "done" : ""} ${i === idx ? "cur" : ""}" onclick="jumpStep(${i})" title="${esc(s.title)}">${i + 1}</button>`
+  ).join("");
   const fields = normalizedFields(step).map(f => {
     const v = vals[f.key] ?? f.default ?? "";
     if(f.type === "dropdown"){
@@ -773,10 +860,9 @@ function renderSteps(items){
   const photos = renderAttachments(step, attachments);
   const timerBlock = totalSeconds > 0 ? `
     <div class="timer" id="timer-box-${step.id}">
-      <div class="small">本地计时 · 电脑端负责响铃</div>
+      <div class="small">⏱ 步骤计时 · 电脑端负责响铃</div>
       <div class="timer-display" id="timer-display-${step.id}">${fmt(totalSeconds)}</div>
       <div class="field timer-edit">
-        <label>计时器</label>
         <input type="number" min="0" step="0.1" value="${timerMinutes(totalSeconds)}" onchange="saveTimerOverride(${step.experiment_id}, ${step.id}, this.value)" ${step.completed_at ? "disabled" : ""} />
         <span class="small">分钟</span>
       </div>
@@ -787,12 +873,13 @@ function renderSteps(items){
       </div>
       <div class="status" id="timer-status-${step.id}"></div>
     </div>` : "";
+  const voiceBlock = renderStepVoice(step);
   const photoBlock = `
     <div class="field">
       <label>附件 / 拍照记录</label>
       <div class="photos">${photos || '<span class="small">暂无附件</span>'}</div>
       <form class="photo-row" onsubmit="uploadPhoto(event, ${step.id})">
-        <label class="button" for="cam-${step.id}">拍照</label>
+        <label class="button" for="cam-${step.id}">📷 拍照</label>
         <label class="button secondary" for="gal-${step.id}">相册</label>
         <label class="button secondary" for="any-${step.id}">文件</label>
         <button type="button" class="secondary" onclick="pasteClipboard(${step.id})">剪贴板</button>
@@ -806,10 +893,10 @@ function renderSteps(items){
     </div>`;
   const wrapupBlock = isLast ? `
     <div class="wrapup">
-      <div class="section-head">
+      <div class="section-head" style="margin-top:0">
         <h2>实验收尾</h2>
       </div>
-      <div class="small">最后一步完成后，可以在电脑端补充储存物品、登记 Box 位置、查看和保存报告。</div>
+      <div class="small">最后一步完成后，补充储存物品、登记 Box 位置、查看和保存报告。</div>
       <div class="actions">
         <a class="button" href="/run/storage/${selectedExperiment}">储存物品 / 登记位置</a>
         <a class="button secondary" href="/run/report/${selectedExperiment}">查看报告</a>
@@ -817,22 +904,23 @@ function renderSteps(items){
       </div>
     </div>` : "";
   card.innerHTML = `
+    <div class="chips">${chips}</div>
     <div class="stepper">
-      <button class="secondary" onclick="goStep(-1)" ${idx === 0 ? "disabled" : ""}>上一步</button>
+      <button class="secondary" onclick="goStep(-1)" ${idx === 0 ? "disabled" : ""}>← 上一步</button>
       <div class="progress"><div style="width:${pct}%"></div></div>
-      <button class="secondary" onclick="goStep(1)" ${idx >= items.length - 1 ? "disabled" : ""}>下一步</button>
+      <button class="secondary" onclick="goStep(1)" ${idx >= items.length - 1 ? "disabled" : ""}>下一步 →</button>
     </div>
-    <div class="section-head">
-      <div class="small">Step ${idx + 1} / ${items.length}${step.completed_at ? ' · <span class="done">已完成</span>' : ''}</div>
+    <div class="section-head" style="margin-top:4px">
+      <div class="small">Step ${idx + 1} / ${items.length} · 已完成 ${doneCount}/${items.length}${step.completed_at ? ' · <span class="done">本步已完成 ✓</span>' : ''}</div>
       <button class="edit-link" onclick="editExperimentName()">改实验名</button>
     </div>
-    <div class="section-head">
+    <div class="section-head" style="margin-top:2px">
       <div class="step-title">${esc(step.title)}</div>
-      <button class="edit-link" onclick="editStepText(${step.id}, 'title', '修改步骤标题')">改标题</button>
+      <button class="edit-link" onclick="editStepText(${step.id}, 'title', '修改步骤标题')">✎</button>
     </div>
     <div class="section-head">
       <h2>步骤说明</h2>
-      <button class="edit-link" onclick="editStepText(${step.id}, 'description', '修改步骤说明')">编辑整段说明</button>
+      <button class="edit-link" onclick="editStepText(${step.id}, 'description', '修改步骤说明')">编辑</button>
     </div>
     <div class="desc">${renderDescription(step)}</div>
     ${timerBlock}
@@ -842,84 +930,15 @@ function renderSteps(items){
     </div>
     ${fields}
     ${notesBlock}
+    ${voiceBlock}
     ${photoBlock}
     ${wrapupBlock}
-    <div class="actions">
-      <button onclick="saveAndSync(${step.id})">保存</button>
-      <button class="green" onclick="completeStep(${step.id})" ${step.completed_at ? "disabled" : ""}>完成步骤</button>
-      <button class="secondary" onclick="goToFirstOpenStep()">未完成步骤</button>
+    <div class="main-actions">
+      <button class="secondary" onclick="saveAndSync(${step.id})">保存</button>
+      <button class="green" onclick="completeStep(${step.id})" ${step.completed_at ? "disabled" : ""}>完成步骤 ✓</button>
       <span class="status" id="status-${step.id}"></span>
     </div>`;
   root.appendChild(card);
-  refreshTimers();
-  return;
-  for(const step of items){
-    const vals = mergedValues(step);
-    const totalSeconds = mergedTimerSeconds(step);
-    const card = document.createElement("article");
-    card.className = "card";
-    const fields = normalizedFields(step).map(f => {
-      const v = vals[f.key] ?? f.default ?? "";
-      if(f.type === "dropdown"){
-        const opts = (f.options || []).map(o => `<option value="${esc(o)}" ${o==v?"selected":""}>${esc(o)}</option>`).join("");
-        return `<div class="field"><label>${esc(f.label)}${f.required ? " *" : ""}</label><select data-step="${step.id}" data-key="${esc(f.key)}" onchange="saveDraft(${step.id})">${opts}</select></div>`;
-      }
-      return `<div class="field"><label>${esc(f.label)}${f.required ? " *" : ""}</label><input data-step="${step.id}" data-key="${esc(f.key)}" value="${esc(v)}" oninput="saveDraft(${step.id})" /></div>`;
-    }).join("");
-    const notesValue = vals[STEP_NOTES_KEY] || "";
-    const notesBlock = `
-      <div class="field notes">
-        <label>备注</label>
-        <textarea data-step="${step.id}" data-key="${STEP_NOTES_KEY}" oninput="saveDraft(${step.id})" placeholder="记录本步骤的观察、异常、样品情况或临时想法">${esc(notesValue)}</textarea>
-      </div>`;
-    const attachments = step.attachments || (step.photo_paths || []).map((p,i) => ({path:p, name:`照片 ${i+1}`}));
-    const photos = renderAttachments(step, attachments);
-    const timerBlock = totalSeconds > 0 ? `
-      <div class="timer" id="timer-box-${step.id}">
-        <div class="small">本地计时 · 电脑端负责响铃</div>
-        <div class="timer-display" id="timer-display-${step.id}">${fmt(totalSeconds)}</div>
-        <div class="field timer-edit">
-          <label>计时器</label>
-          <input type="number" min="0" step="0.1" value="${timerMinutes(totalSeconds)}" onchange="saveTimerOverride(${step.experiment_id}, ${step.id}, this.value)" ${step.completed_at ? "disabled" : ""} />
-          <span class="small">分钟</span>
-        </div>
-        <div class="actions">
-          <button onclick="startLocalTimer(${step.experiment_id}, ${step.id}, ${totalSeconds})" ${step.completed_at ? "disabled" : ""}>开始</button>
-          <button class="secondary" onclick="pauseLocalTimer(${step.experiment_id}, ${step.id})" ${step.completed_at ? "disabled" : ""}>暂停</button>
-          <button class="secondary" onclick="resetLocalTimer(${step.experiment_id}, ${step.id}, ${totalSeconds})" ${step.completed_at ? "disabled" : ""}>重置</button>
-        </div>
-        <div class="status" id="timer-status-${step.id}"></div>
-      </div>` : "";
-    const photoBlock = step.has_camera ? `
-      <div class="field">
-        <label>照片</label>
-        <div class="photos">${photos || '<span class="small">暂无照片</span>'}</div>
-        <form class="photo-row" onsubmit="uploadPhoto(event, ${step.id})">
-          <label class="button" for="cam-${step.id}">拍照</label>
-          <label class="button secondary" for="gal-${step.id}">相册</label>
-          <button type="button" class="secondary" onclick="pasteClipboard(${step.id})">剪贴板</button>
-          <input id="cam-${step.id}" name="file" type="file" accept="image/*" capture="environment" onchange="markFile(this)" />
-          <input id="gal-${step.id}" name="file2" type="file" accept="image/*" onchange="markFile(this)" />
-          <input id="name-${step.id}" name="attachment_name" type="text" placeholder="附件名称（默认原文件名）" />
-          <button type="submit">上传</button>
-          <span class="small" id="file-${step.id}">未选择</span>
-        </form>
-      </div>` : "";
-    card.innerHTML = `
-      <div class="small">Step ${step.step_index + 1}${step.completed_at ? ' · <span class="done">已完成</span>' : ''}</div>
-      <div class="step-title">${esc(step.title)}</div>
-      <div class="desc">${renderDescription(step)}</div>
-      ${timerBlock}
-      ${fields}
-      ${notesBlock}
-      ${photoBlock}
-      <div class="actions">
-        <button onclick="saveAndSync(${step.id})">保存</button>
-        <button class="green" onclick="completeStep(${step.id})" ${step.completed_at ? "disabled" : ""}>完成步骤</button>
-        <span class="status" id="status-${step.id}"></span>
-      </div>`;
-    root.appendChild(card);
-  }
   refreshTimers();
 }
 
@@ -1553,6 +1572,265 @@ document.addEventListener("paste", async event => {
 
 function esc(v){ return String(v ?? "").replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
 
+// ── 语音速记（voice notes）───────────────────────────────
+const voiceState = {recognizing:false, recognition:null, mediaRecorder:null, chunks:[]};
+
+async function loadVoiceNotes(){
+  if(!selectedExperiment){ voiceNotes = []; return; }
+  try { voiceNotes = await api(`/api/experiments/${selectedExperiment}/voice_notes`); }
+  catch { /* 离线时保留上次内容 */ }
+}
+
+function voiceTime(iso){
+  const t = new Date(iso);
+  if(Number.isNaN(t.getTime())) return "";
+  const p = n => String(n).padStart(2, "0");
+  return `${p(t.getHours())}:${p(t.getMinutes())}`;
+}
+
+function voiceNoteHtml(n){
+  let body;
+  if(n.text){
+    body = `<span onclick="editVoiceNote(${n.id})">${esc(n.text)}</span>`;
+    if(n.audio_url) body += `<audio controls preload="none" src="${esc(n.audio_url)}"></audio>`;
+  } else if(n.audio_url){
+    const tag = n.status === "pending" ? "转写中…" : "录音 · 待转写";
+    body = `<span class="vtag">${tag}</span><audio controls preload="none" src="${esc(n.audio_url)}"></audio>`;
+  } else {
+    body = '<span class="vtag">空</span>';
+  }
+  return `<div class="voice-note">
+    <span class="vtime">${voiceTime(n.created_at)}</span>
+    <span class="vbody">${body}</span>
+    <span class="vops"><button onclick="deleteVoiceNote(${n.id})" title="删除" aria-label="删除速记">✕</button></span>
+  </div>`;
+}
+
+function renderStepVoice(step){
+  const list = voiceNotes.filter(n => n.step_id === step.id);
+  const inner = list.length
+    ? list.map(voiceNoteHtml).join("")
+    : '<span class="small">点右下角 🎤，边做边说，说完的话自动记进这一步。</span>';
+  return `
+    <div class="section-head">
+      <h2>语音速记</h2>
+      <button class="edit-link" onclick="openVoicePanel()">🎤 说一段</button>
+    </div>
+    <div class="voice-list">${inner}</div>`;
+}
+
+function renderVoiceAll(){
+  const box = document.getElementById("voiceAllList");
+  if(!box) return;
+  if(!voiceNotes.length){ box.innerHTML = '<span class="small">还没有速记。</span>'; return; }
+  const byStep = {};
+  for(const s of steps) byStep[s.id] = s;
+  box.innerHTML = voiceNotes.slice().reverse().map(n => {
+    const s = byStep[n.step_id];
+    const tag = s ? `<div class="small" style="margin-top:4px">Step ${s.step_index + 1} · ${esc(s.title)}</div>` : "";
+    return tag + voiceNoteHtml(n);
+  }).join("");
+}
+
+function editVoiceNote(id){
+  const n = voiceNotes.find(x => x.id === id);
+  if(!n) return;
+  openModal("编辑速记", `<div class="field"><textarea id="editVoiceText">${esc(n.text || "")}</textarea></div>`, async () => {
+    const text = document.getElementById("editVoiceText").value.trim();
+    await api(`/api/voice_notes/${id}`, {method:"PATCH", body:JSON.stringify({text})});
+    await loadVoiceNotes();
+    renderSteps(steps);
+    renderVoiceAll();
+  });
+}
+
+async function deleteVoiceNote(id){
+  if(!confirm("删除这条速记？")) return;
+  try {
+    await api(`/api/voice_notes/${id}`, {method:"DELETE"});
+    await loadVoiceNotes();
+    renderSteps(steps);
+    renderVoiceAll();
+  } catch(e) { alert("删除失败：" + e.message); }
+}
+
+function openVoicePanel(){
+  document.getElementById("voiceBackdrop").classList.add("open");
+  document.getElementById("voiceSheet").classList.add("open");
+  renderVoiceAll();
+}
+
+function closeVoicePanel(){
+  stopVoiceRec();
+  document.getElementById("voiceBackdrop").classList.remove("open");
+  document.getElementById("voiceSheet").classList.remove("open");
+}
+
+function speechSupported(){
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function initVoice(){
+  const hint = document.getElementById("voiceHint");
+  if(speechSupported()){
+    hint.textContent = "点「开始说话」，边做实验边说，文字实时出现，保存后进入当前步骤。";
+  } else if(navigator.mediaDevices && window.MediaRecorder){
+    hint.textContent = "此浏览器不支持实时听写，改为录音上传，电脑端稍后自动转写。";
+  } else {
+    hint.textContent = "此环境不支持录音。点下方输入框，用键盘上的听写（麦克风键）也可以。";
+  }
+}
+
+function setRecUI(on, label){
+  const b = document.getElementById("voiceRecBtn");
+  const mic = document.getElementById("micBtn");
+  if(b){ b.textContent = on ? (label || "停止") : "开始说话"; b.classList.toggle("rec", on); }
+  if(mic) mic.classList.toggle("rec", on);
+}
+
+function toggleVoiceRec(){
+  if(voiceState.recognizing || voiceState.mediaRecorder){ stopVoiceRec(); return; }
+  if(speechSupported()) startSpeech();
+  else startRecording();
+}
+
+function startSpeech(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const rec = new SR();
+  rec.lang = "zh-CN";
+  rec.continuous = true;
+  rec.interimResults = true;
+  const live = document.getElementById("voiceLive");
+  rec.onresult = e => {
+    let interim = "";
+    for(let i = e.resultIndex; i < e.results.length; i++){
+      const r = e.results[i];
+      if(r.isFinal){
+        const t = r[0].transcript.trim();
+        if(t){
+          const ta = document.getElementById("voiceText");
+          ta.value = (ta.value ? ta.value + " " : "") + t;
+        }
+      } else {
+        interim += r[0].transcript;
+      }
+    }
+    live.textContent = interim;
+  };
+  rec.onend = () => {
+    if(voiceState.recognizing){
+      try { rec.start(); } catch { voiceState.recognizing = false; setRecUI(false); }
+    }
+  };
+  rec.onerror = e => {
+    live.textContent = "";
+    if(e.error === "not-allowed" || e.error === "service-not-allowed"){
+      voiceState.recognizing = false;
+      voiceState.recognition = null;
+      setRecUI(false);
+      document.getElementById("voiceHint").textContent = "麦克风权限被拒绝。可改用键盘听写，或在系统设置里允许麦克风。";
+    }
+  };
+  voiceState.recognition = rec;
+  voiceState.recognizing = true;
+  setRecUI(true, "🔴 停止听写");
+  try { rec.start(); } catch {}
+}
+
+async function startRecording(){
+  if(!(navigator.mediaDevices && window.MediaRecorder)){
+    document.getElementById("voiceHint").textContent = "此环境不支持录音，请用键盘听写。";
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    const mr = new MediaRecorder(stream);
+    voiceState.chunks = [];
+    mr.ondataavailable = e => { if(e.data && e.data.size) voiceState.chunks.push(e.data); };
+    mr.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const type = mr.mimeType || "audio/mp4";
+      const blob = new Blob(voiceState.chunks, {type});
+      voiceState.chunks = [];
+      if(blob.size > 0) await uploadVoiceAudio(blob, type);
+    };
+    voiceState.mediaRecorder = mr;
+    mr.start();
+    setRecUI(true, "🔴 停止录音");
+  } catch(e) {
+    document.getElementById("voiceHint").textContent = "无法打开麦克风：" + e.message;
+  }
+}
+
+function stopVoiceRec(){
+  if(voiceState.recognition){
+    voiceState.recognizing = false;
+    try { voiceState.recognition.stop(); } catch {}
+    voiceState.recognition = null;
+  }
+  if(voiceState.mediaRecorder){
+    try { voiceState.mediaRecorder.stop(); } catch {}
+    voiceState.mediaRecorder = null;
+  }
+  const live = document.getElementById("voiceLive");
+  if(live) live.textContent = "";
+  setRecUI(false);
+}
+
+function currentStepIdForVoice(){
+  const s = steps[currentStepIndex()];
+  return s ? s.id : null;
+}
+
+async function uploadVoiceAudio(blob, type){
+  const ext = type.includes("mp4") ? ".m4a" : (type.includes("ogg") ? ".ogg" : (type.includes("webm") ? ".webm" : ".bin"));
+  const fd = new FormData();
+  fd.append("file", new File([blob], "voice" + ext, {type}));
+  const sid = currentStepIdForVoice();
+  if(sid) fd.append("step_id", String(sid));
+  const hint = document.getElementById("voiceHint");
+  try {
+    const res = await fetch(`/api/experiments/${selectedExperiment}/voice_notes/audio`, {method:"POST", body:fd});
+    if(!res.ok) throw new Error(await res.text());
+    hint.textContent = "录音已上传。转写完成后文字会自动出现在记录里。";
+    await loadVoiceNotes();
+    renderSteps(steps);
+    renderVoiceAll();
+  } catch(e) {
+    hint.textContent = "录音上传失败：" + e.message;
+  }
+}
+
+async function saveVoiceText(){
+  const ta = document.getElementById("voiceText");
+  const text = ta.value.trim();
+  if(!text){ ta.focus(); return; }
+  stopVoiceRec();
+  try {
+    await api(`/api/experiments/${selectedExperiment}/voice_notes`, {
+      method:"POST",
+      body:JSON.stringify({text, step_id: currentStepIdForVoice()})
+    });
+    ta.value = "";
+    await loadVoiceNotes();
+    renderSteps(steps);
+    renderVoiceAll();
+  } catch(e) {
+    document.getElementById("voiceHint").textContent = "保存失败（网络断了？）：" + e.message;
+  }
+}
+
+// 语音速记列表定时刷新：等待中的转写完成后自动出现
+setInterval(async () => {
+  if(!voiceNotes.some(n => n.status === "pending")) return;
+  const before = JSON.stringify(voiceNotes);
+  await loadVoiceNotes();
+  if(JSON.stringify(voiceNotes) !== before){
+    renderSteps(steps);
+    renderVoiceAll();
+  }
+}, 8000);
+
 window.addEventListener("online", syncNow);
 setInterval(syncNow, 15000);
 setInterval(refreshTimers, 1000);
@@ -1563,7 +1841,7 @@ function applyBackTarget(){
   const isLan = /^192\\.168\\.|^10\\.|^172\\.(1[6-9]|2\\d|3[0-1])\\./.test(location.hostname);
   if(location.protocol === "https:" || (!localHosts.includes(location.hostname) && !isLan)){
     link.href = "/run";
-    link.textContent = "实验列表";
+    link.title = "实验列表";
   } else {
     link.href = `${location.protocol}//${location.hostname}:8550/`;
   }
@@ -1571,10 +1849,21 @@ function applyBackTarget(){
 renderQueueInfo();
 applyBackTarget();
 loadExperiments();
+initVoice();
 </script>
-</body>
-</html>
-""", headers={"Cache-Control": "no-store, max-age=0"})
+"""
+
+
+@app.get("/run", response_class=HTMLResponse)
+@app.get("/mobile", response_class=HTMLResponse)
+def experiment_runner(experiment_id: Optional[int] = Query(None)):
+    return _html_response(
+        web_ui.page_head("ELN 实验执行", _RUNNER_CSS)
+        + _RUNNER_BODY
+        + web_ui.TIMER_DOCK_HTML
+        + "\n</body>\n</html>",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 # ─────────────────────────────────────────────
@@ -1895,7 +2184,16 @@ def confirm_managed_timer(exp_id: int, step_id: int):
 @app.get("/api/timers/active")
 def list_active_timers():
     timers = db_ops.list_active_timers()
-    return [_timer_to_dict(t) for t in timers]
+    result = []
+    for t in timers:
+        d = _timer_to_dict(t)
+        step = db_ops.get_step(t.step_id)
+        exp = db_ops.get_experiment(t.experiment_id)
+        d["step_title"] = step.title if step else f"Step {t.step_id}"
+        d["step_index"] = step.step_index if step else 0
+        d["experiment_name"] = exp.name if exp else f"实验 {t.experiment_id}"
+        result.append(d)
+    return result
 
 
 def _timer_to_dict(timer) -> dict:
@@ -1970,6 +2268,87 @@ async def upload_photo(
     db_ops.add_photo_to_step(step_id, rel_path, display_name)
 
     return {"path": rel_path, "name": display_name, "url": f"/photos/{rel_path}"}
+
+
+# ─────────────────────────────────────────────
+# Voice notes (语音速记)
+# ─────────────────────────────────────────────
+
+def _voice_note_to_dict(note: dict) -> dict:
+    d = dict(note)
+    if d.get("audio_path"):
+        d["audio_url"] = "/photos/" + str(d["audio_path"]).replace("\\", "/")
+    return d
+
+
+@app.get("/api/experiments/{exp_id}/voice_notes")
+def list_voice_notes(exp_id: int):
+    if not db_ops.get_experiment(exp_id):
+        raise HTTPException(404, "Experiment not found")
+    return [_voice_note_to_dict(n) for n in db_ops.list_voice_notes(exp_id)]
+
+
+@app.post("/api/experiments/{exp_id}/voice_notes", status_code=201)
+def create_voice_note(exp_id: int, body: VoiceNoteCreate):
+    if not db_ops.get_experiment(exp_id):
+        raise HTTPException(404, "Experiment not found")
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+    note = db_ops.create_voice_note(exp_id, text=text, step_id=body.step_id, status="done")
+    return _voice_note_to_dict(note)
+
+
+@app.post("/api/experiments/{exp_id}/voice_notes/audio", status_code=201)
+async def upload_voice_audio(
+    exp_id: int,
+    file: UploadFile = File(...),
+    step_id: Optional[int] = Form(None),
+):
+    if not db_ops.get_experiment(exp_id):
+        raise HTTPException(404, "Experiment not found")
+    photos_dir = _photos_dir()
+    sub_dir = os.path.join(photos_dir, str(exp_id), "voice")
+    os.makedirs(sub_dir, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    ext = os.path.splitext(file.filename or "note.m4a")[1] or ".m4a"
+    filename = f"voice_{ts}{ext}"
+    filepath = os.path.join(sub_dir, filename)
+    with open(filepath, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    if os.path.getsize(filepath) <= 0:
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        raise HTTPException(400, "录音为空，请重试")
+
+    from server import voice as voice_worker
+    status = "pending" if voice_worker.transcription_available() else "audio_only"
+    rel_path = f"{exp_id}/voice/{filename}"
+    note = db_ops.create_voice_note(
+        exp_id, text="", step_id=step_id, audio_path=rel_path, status=status,
+    )
+    if status == "pending":
+        voice_worker.notify_new_audio()
+    return _voice_note_to_dict(note)
+
+
+@app.patch("/api/voice_notes/{note_id}")
+def update_voice_note(note_id: int, body: VoiceNoteUpdate):
+    if not db_ops.get_voice_note(note_id):
+        raise HTTPException(404, "Voice note not found")
+    updates = body.model_dump(exclude_none=True)
+    if "text" in updates:
+        updates["status"] = "done"
+    note = db_ops.update_voice_note(note_id, **updates)
+    return _voice_note_to_dict(note)
+
+
+@app.delete("/api/voice_notes/{note_id}", status_code=204)
+def delete_voice_note(note_id: int):
+    if not db_ops.delete_voice_note(note_id):
+        raise HTTPException(404, "Voice note not found")
 
 
 @app.get("/web/upload/{step_id}", response_class=HTMLResponse)
@@ -2396,6 +2775,48 @@ def _redirect_html(url: str, message: str = "正在返回") -> HTMLResponse:
 """)
 
 
+_STORAGE_CSS = """
+    main { max-width:1120px; display:grid; gap:14px; }
+    .item { background:#fbfaf7; border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:10px; box-shadow:none; }
+    .item b { font-size:15px; }
+    .item button { margin-top:8px; min-height:36px; padding:6px 12px; font-size:14px; }
+    .grid-layout { display:grid; grid-template-columns:minmax(260px,360px) 1fr; gap:14px; align-items:start; }
+    .register-panel { display:none; }
+    .register-panel.open { display:block; }
+    .box-grid { display:grid; gap:4px; margin-top:12px; width:max-content; max-width:100%; overflow:auto; }
+    .slot { width:44px; height:38px; min-height:0; padding:0; border:1px solid var(--line); border-radius:8px;
+            background:#faf9f6; color:#43413d; font-size:12px; font-weight:600; box-shadow:none; }
+    .slot.occupied { background:var(--accent-soft); border-color:#f2c48f; color:#9a5a00; }
+    .slot.selected { background:var(--green); color:#fff; border-color:var(--green); }
+    @media (max-width:760px){ .grid-layout { grid-template-columns:1fr; } .slot { width:38px; } }
+"""
+
+_REPORT_CSS = """
+    main { max-width:900px; }
+    section { margin-bottom:14px; }
+    pre { white-space:pre-wrap; word-break:break-word; line-height:1.5; overflow:auto;
+          background:#f8f6f1; border:1px solid var(--line); border-radius:10px; padding:10px; }
+    code { background:#f3f0ea; padding:2px 5px; border-radius:5px; font-size:.92em; }
+    table { width:100%; border-collapse:collapse; margin:12px 0; font-size:14px; }
+    th, td { border:1px solid var(--line); padding:8px; text-align:left; vertical-align:top; }
+    th { background:#faf8f4; }
+    blockquote { border-left:3px solid var(--accent); margin-left:0; padding:3px 12px; color:#6b665e;
+                 background:var(--accent-soft); border-radius:0 8px 8px 0; }
+    .markdown-body { line-height:1.65; overflow-wrap:anywhere; }
+    .markdown-body h1 { font-size:22px; } .markdown-body h2 { font-size:18px; } .markdown-body h3 { font-size:16px; }
+    img { max-width:min(100%,640px); border:1px solid var(--line); border-radius:10px; }
+    figure { margin:14px 0; }
+    figcaption { color:var(--muted); font-size:13px; margin-top:5px; }
+    .attachment-actions { display:flex; gap:14px; margin-top:8px; }
+    .attachment-actions a { color:var(--accent-strong); font-weight:600; }
+    .file-attachment { display:flex; flex-direction:column; gap:6px; padding:14px; border:1px solid var(--line);
+                       border-radius:10px; background:#fbfaf7; }
+    .file-attachment span { color:var(--muted); overflow-wrap:anywhere; }
+    .saved { color:#1d6f3f; font-weight:600; }
+    audio { width:100%; max-width:420px; }
+"""
+
+
 @app.get("/run/storage/{exp_id}", response_class=HTMLResponse)
 def run_storage_page(exp_id: int, msg: str = Query(""), error: str = Query("")):
     exp = db_ops.get_experiment(exp_id)
@@ -2427,49 +2848,14 @@ def run_storage_page(exp_id: int, msg: str = Query(""), error: str = Query("")):
     elif error:
         notice = f'<div class="notice error">{_html_escape(error)}</div>'
 
+    head = web_ui.page_head(f"储存登记 · {_html_escape(exp.name)}", _STORAGE_CSS)
     return _html_response(f"""
-<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>储存登记 · {_html_escape(exp.name)}</title>
-  <style>
-    :root {{ --orange:#fb8c00; --green:#43a047; --line:#e8e8e8; --muted:#777; }}
-    * {{ box-sizing:border-box; }}
-    body {{ margin:0; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#f7f7f7; color:#222; }}
-    header {{ position:sticky; top:0; background:#fff; border-bottom:1px solid var(--line); padding:12px 18px; display:flex; gap:12px; align-items:center; z-index:2; }}
-    h1 {{ font-size:20px; margin:0; flex:1; }}
-    main {{ max-width:1120px; margin:0 auto; padding:14px; display:grid; gap:14px; }}
-    section, .item {{ background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px; }}
-    h2 {{ margin:0 0 12px; font-size:17px; }}
-    button, a.button, input, select, textarea {{ font:inherit; }}
-    button, a.button {{ border:0; border-radius:8px; background:var(--orange); color:white; padding:10px 14px; text-decoration:none; cursor:pointer; display:inline-block; }}
-    button.secondary, a.secondary {{ background:#eee; color:#333; }}
-    button.green {{ background:var(--green); }}
-    .actions {{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:12px; }}
-    .muted {{ color:var(--muted); font-size:13px; }}
-    .notice {{ border-radius:10px; padding:12px 14px; font-weight:600; }}
-    .notice.ok {{ background:#e9f7ec; color:#2e7d32; border:1px solid #b7dfbf; }}
-    .notice.error {{ background:#fff0f0; color:#c62828; border:1px solid #ffc7c7; }}
-    textarea, input, select {{ width:100%; border:1px solid #ddd; border-radius:8px; padding:10px; background:white; }}
-    textarea {{ min-height:110px; resize:vertical; }}
-    .grid-layout {{ display:grid; grid-template-columns:minmax(260px, 360px) 1fr; gap:14px; align-items:start; }}
-    .item {{ margin-bottom:10px; }}
-    .register-panel {{ display:none; }}
-    .register-panel.open {{ display:block; }}
-    .box-grid {{ display:grid; gap:4px; margin-top:12px; width:max-content; max-width:100%; overflow:auto; }}
-    .slot {{ width:44px; height:36px; border:1px solid #ddd; border-radius:6px; background:#fafafa; color:#333; padding:0; font-size:12px; }}
-    .slot.occupied {{ background:#fff2df; border-color:#ffc078; }}
-    .slot.selected {{ background:var(--green); color:white; border-color:var(--green); }}
-    @media (max-width:760px) {{ .grid-layout {{ grid-template-columns:1fr; }} .slot {{ width:38px; }} }}
-  </style>
-</head>
+{head}
 <body>
-  <header>
-    <a class="button secondary" href="/run?experiment_id={exp_id}">返回实验</a>
+  <header class="app-bar">
+    <a class="button secondary" href="/run?experiment_id={exp_id}">← 实验</a>
     <h1>储存登记 · {_html_escape(exp.name)}</h1>
-    <a class="button secondary" href="/run/report/{exp_id}">查看报告</a>
+    <a class="button secondary" href="/run/report/{exp_id}">报告</a>
   </header>
   <main>
     {notice}
@@ -2576,6 +2962,7 @@ def run_storage_page(exp_id: int, msg: str = Query(""), error: str = Query("")):
       }}
     }}
   </script>
+{web_ui.TIMER_DOCK_HTML}
 </body>
 </html>
 """)
@@ -2703,39 +3090,11 @@ def run_report_page(
                 "</figure>"
             )
     saved_block = f'<p class="saved">已保存：{_html_escape(saved)}</p>' if saved else ""
+    head = web_ui.page_head(f"实验报告 · {_html_escape(exp.name)}", _REPORT_CSS)
     return _html_response(f"""
-<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>实验报告 · {_html_escape(exp.name)}</title>
-  <style>
-    body {{ margin:0; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#f7f7f7; color:#222; }}
-    header {{ position:sticky; top:0; background:#fff; border-bottom:1px solid #e8e8e8; padding:12px 18px; display:flex; gap:12px; align-items:center; z-index:2; }}
-    h1 {{ font-size:20px; margin:0; flex:1; }}
-    main {{ max-width:980px; margin:0 auto; padding:14px; }}
-    section {{ background:#fff; border:1px solid #e8e8e8; border-radius:10px; padding:14px; margin-bottom:14px; }}
-    button, a.button {{ border:0; border-radius:8px; background:#fb8c00; color:white; padding:10px 14px; text-decoration:none; cursor:pointer; font:inherit; }}
-    a.secondary {{ background:#eee; color:#333; }}
-    pre {{ white-space:pre-wrap; word-break:break-word; line-height:1.5; overflow:auto; }}
-    code {{ background:#f3f3f3; padding:2px 5px; border-radius:4px; }}
-    table {{ width:100%; border-collapse:collapse; margin:12px 0; }}
-    th, td {{ border:1px solid #ccc; padding:8px; text-align:left; vertical-align:top; }}
-    blockquote {{ border-left:4px solid #fb8c00; margin-left:0; padding-left:12px; color:#555; }}
-    .markdown-body {{ line-height:1.6; overflow-wrap:anywhere; }}
-    img {{ max-width:min(100%, 640px); border:1px solid #ddd; border-radius:8px; }}
-    figure {{ margin:14px 0; }}
-    figcaption {{ color:#666; font-size:13px; margin-top:5px; }}
-    .attachment-actions {{ display:flex; gap:14px; margin-top:8px; }}
-    .attachment-actions a {{ color:#e67600; font-weight:600; }}
-    .file-attachment {{ display:flex; flex-direction:column; gap:6px; padding:14px; border:1px solid #ddd; border-radius:8px; }}
-    .file-attachment span {{ color:#666; overflow-wrap:anywhere; }}
-    .saved {{ color:#2e7d32; }}
-  </style>
-</head>
+{head}
 <body>
-  <header>
+  <header class="app-bar">
     <a class="button secondary" href="{_html_escape(back_url)}">{back_label}</a>
     <h1>实验报告 · {_html_escape(exp.name)}</h1>
     <form method="post" action="/run/report/{exp_id}/save?return_to={quote(return_to)}"><button type="submit">保存报告</button></form>
@@ -2744,13 +3103,14 @@ def run_report_page(
     {saved_block}
     <section>
       <h2>附件 / 照片预览</h2>
-      {"".join(photo_html) if photo_html else '<p>暂无附件。</p>'}
+      {"".join(photo_html) if photo_html else '<p class="muted">暂无附件。</p>'}
     </section>
     <section>
       <h2>实验报告</h2>
       <div class="markdown-body">{report_html}</div>
     </section>
   </main>
+{web_ui.TIMER_DOCK_HTML}
 </body>
 </html>
 """)
@@ -2991,7 +3351,9 @@ def get_report(exp_id: int):
     steps = db_ops.get_steps(exp_id)
     storage_items = db_ops.get_storage_items(exp_id)
     boxes = {b.id: b for b in db_ops.list_boxes()}
-    md = generate_report(exp, steps, storage_items, boxes, db_ops.list_timer_events(exp_id))
+    md = generate_report(exp, steps, storage_items, boxes,
+                         db_ops.list_timer_events(exp_id),
+                         db_ops.list_voice_notes(exp_id))
     return {"experiment_id": exp_id, "markdown": md}
 
 
