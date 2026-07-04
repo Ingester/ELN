@@ -1190,9 +1190,12 @@ _RUNNER_CSS = """
     .notes textarea { min-height:88px; }
     .done { color:var(--green); font-weight:700; }
 
-    .photo-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
-    .photo-row .button, .photo-row button { min-height:38px; padding:7px 13px; font-size:14px; }
-    .photo-row input[type=text] { flex:1; min-width:150px; }
+    .photo-row { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
+    .photo-row input[type=text] { width:100%; }
+    .pr-btns { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+    .pr-btns .button, .pr-btns button { width:100%; min-height:40px; padding:7px 6px; font-size:14px; }
+    .pr-submit { display:flex; gap:10px; align-items:center; }
+    .pr-submit .small { color:var(--muted); }
     input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
     .photos { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; align-items:start; }
     .photos a { color:var(--accent-strong); }
@@ -1279,14 +1282,12 @@ _RUNNER_CSS = """
 _RUNNER_BODY = """
 <body>
   <header class="app-bar">
-    <a class="icon-btn" id="backToFlet" href="/" aria-label="返回首页">__I_HOME__</a>
     <div class="exp-wrap">
       <select id="experimentSelect" onchange="selectExperiment(this.value)" aria-label="选择实验"></select>
     </div>
     <span id="net" class="status">连接中</span>
     <button class="icon-btn" id="micBtn" onclick="openVoicePanel()" title="语音速记" aria-label="语音速记">__I_MIC__</button>
     <button class="icon-btn" onclick="loadExperiments()" title="刷新" aria-label="刷新">__I_REFRESH__</button>
-    <button class="icon-btn" onclick="syncCurrentAndNow()" title="同步" aria-label="同步">__I_SYNC__</button>
   </header>
   <main>
     <div id="queueInfo" class="queue-info"></div>
@@ -1721,16 +1722,20 @@ function renderSteps(items){
       <label>附件 / 拍照记录</label>
       <div class="photos">${photos || '<span class="small">暂无附件</span>'}</div>
       <form class="photo-row" onsubmit="uploadPhoto(event, ${step.id})">
-        <label class="button" for="cam-${step.id}">${svgIcon("camera",17)} 拍照</label>
-        <label class="button secondary" for="gal-${step.id}">相册</label>
-        <label class="button secondary" for="any-${step.id}">文件</label>
-        <button type="button" class="secondary" onclick="pasteClipboard(${step.id})">剪贴板</button>
+        <div class="pr-btns">
+          <label class="button secondary" for="cam-${step.id}">${svgIcon("camera",16)} 拍照</label>
+          <label class="button secondary" for="gal-${step.id}">${svgIcon("image",16)} 相册</label>
+          <label class="button secondary" for="any-${step.id}">文件</label>
+          <button type="button" class="secondary" onclick="pasteClipboard(${step.id})">剪贴板</button>
+        </div>
         <input id="cam-${step.id}" name="file" type="file" accept="image/*" capture="environment" onchange="markFile(this)" />
         <input id="gal-${step.id}" name="file2" type="file" accept="image/*" onchange="markFile(this)" />
         <input id="any-${step.id}" name="file3" type="file" onchange="markFile(this)" />
         <input id="name-${step.id}" name="attachment_name" type="text" placeholder="附件名称（默认原文件名）" />
-        <button type="submit">上传</button>
-        <span class="small" id="file-${step.id}">未选择</span>
+        <div class="pr-submit">
+          <button type="submit">${svgIcon("upload",16)} 上传</button>
+          <span class="small" id="file-${step.id}">未选择</span>
+        </div>
       </form>
     </div>`;
   const wrapupBlock = isLast ? `
@@ -2797,8 +2802,7 @@ initVoice();
 def experiment_runner(experiment_id: Optional[int] = Query(None)):
     body = _RUNNER_BODY.replace("__ICON_JS__", web_ui.ICON_JS)
     body = _fill_icons(body, {
-        "__I_HOME__": ("home", 18), "__I_REFRESH__": ("refresh", 18),
-        "__I_SYNC__": ("upload", 18), "__I_MIC__": ("mic", 18),
+        "__I_REFRESH__": ("refresh", 18), "__I_MIC__": ("mic", 18),
         "__I_SPARK__": ("sparkle", 17),
     })
     return _html_response(
