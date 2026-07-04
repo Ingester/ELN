@@ -990,12 +990,81 @@ load();
 
 
 _SETTINGS_CSS = _NAV_CSS + """
-    main { max-width:560px; }
+    main { max-width:600px; }
+    section { margin-bottom:14px; }
     .field { margin-bottom:14px; }
     .field label { display:block; margin-bottom:6px; }
     .save-row { margin-top:6px; }
     #saveHint { margin-left:10px; font-size:13px; }
     .about { margin-top:22px; color:var(--faint); font-size:12px; line-height:1.7; }
+    details.help { border-top:1px solid var(--line); padding:12px 0 2px; }
+    details.help:first-of-type { border-top:0; }
+    details.help > summary { cursor:pointer; font-weight:500; font-size:14.5px; list-style:none;
+      display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    details.help > summary::-webkit-details-marker { display:none; }
+    details.help > summary::after { content:"+"; color:var(--faint); font-size:18px; }
+    details.help[open] > summary::after { content:"–"; }
+    .help-body { font-size:13.5px; color:var(--muted); line-height:1.7; padding:8px 0 4px; }
+    .help-body b { color:var(--ink); font-weight:500; }
+    .help-body code, .help-body pre { font-family:ui-monospace,Consolas,monospace; }
+    .help-body code { background:var(--inset); border:1px solid var(--line); border-radius:5px; padding:1px 5px; font-size:12.5px; }
+    .help-body pre { background:var(--inset); border:1px solid var(--line); border-radius:10px; padding:12px; overflow:auto; font-size:12px; color:var(--ink); white-space:pre; }
+    .help-body ul { margin:6px 0 6px 20px; padding:0; }
+    .help-body li { margin-bottom:3px; }
+"""
+
+_HELP_HTML = """
+    <section>
+      <h2>使用说明</h2>
+      <details class="help"><summary>怎么随手记录（速记）</summary>
+        <div class="help-body">在「速记」页直接打字、点话筒说话（自动转文字）、或拍照，点<b>打包存档</b>就进收件箱——<b>不用先打开任何实验</b>。回头在「收件箱」里选实验和步骤<b>写入记录</b>；配好 AI 后，AI 会先建议放到哪一步，你确认即可。</div>
+      </details>
+      <details class="help"><summary>实验里怎么填数据</summary>
+        <div class="help-body">从「协议库」的某个协议<b>新建实验</b>后进入实验页：逐步查看说明、在<b>记录数据</b>里填字段、写<b>备注</b>、需要就<b>拍照</b>；有计时的步骤可开始/暂停计时（电脑端到点响铃）。填完点<b>完成步骤</b>进入下一步，最后可结束并查看/保存报告。</div>
+      </details>
+      <details class="help"><summary>协议（protocol）格式</summary>
+        <div class="help-body">
+          协议是一段 JSON，描述一个实验有哪些步骤、每步记录什么。顶层字段：
+          <ul>
+            <li><code>protocol_name</code> 协议名，必填</li>
+            <li><code>version</code> / <code>author</code> 版本、作者，可选</li>
+            <li><code>steps</code> 步骤数组，必填</li>
+            <li><code>storage_items</code> 预设储存物品，可选</li>
+          </ul>
+          每个 step：<code>title</code>、<code>description</code>（支持 Markdown，换行用 <code>\\n</code>）、<code>timer_seconds</code>（秒，30 分钟写 1800）、<code>has_camera</code>、<code>fields</code>。<br/>
+          每个 field：<code>key</code>（英文唯一）、<code>label</code>（显示名）、<code>type</code>（<code>text</code>/<code>number</code>/<code>dropdown</code>）、<code>default</code>、<code>required</code>、<code>options</code>（下拉才需要）。
+          <pre>{
+  "protocol_name": "Colony PCR",
+  "version": "1.0",
+  "steps": [
+    {
+      "title": "配制反应体系",
+      "description": "冰上配制，总体积 20 µL",
+      "timer_seconds": 0,
+      "has_camera": false,
+      "fields": [
+        {"key": "template_volume", "label": "模板用量 (µL)",
+         "type": "number", "default": "1", "required": true, "options": []}
+      ]
+    },
+    {
+      "title": "PCR 扩增",
+      "description": "放入 PCR 仪，运行 30 分钟",
+      "timer_seconds": 1800,
+      "fields": []
+    }
+  ]
+}</pre>
+          在「协议库 → 导入协议」里粘贴这段 JSON 即可。
+        </div>
+      </details>
+      <details class="help"><summary>储存物品输入格式</summary>
+        <div class="help-body">实验结束时可登记要冻存/保存的样品，一行一个，格式：<br/><code>样品名 | 管型 | 备注</code>，例如：<br/><code>PCR 产物 | 1.5mL EP管 | sample A</code><br/>也可以只写样品名。之后选 Box、点格子完成位置登记。</div>
+      </details>
+      <details class="help"><summary>AI 归档怎么用</summary>
+        <div class="help-body">上面填好模型服务和密钥后：在实验页的语音速记里点「AI 整理」，或（下一步会做）在电脑上用 Claude Code / Codex 读收件箱。AI 只会给<b>建议</b>，最终由你在收件箱/草稿里确认才真正写入记录，数字类字段请核对。</div>
+      </details>
+    </section>
 """
 
 
@@ -1027,6 +1096,7 @@ def settings_page(request: Request):
         <input id="baseUrl" placeholder="兼容接口填 base_url，官方留空" /></div>
       <div class="save-row"><button class="green" onclick="saveAi()">保存</button><span class="small" id="saveHint"></span></div>
     </section>
+{_HELP_HTML}
     <div class="about">局域网地址：{lan or "启动后可见"}<br/>数据存储于本机 ELN_Data，升级代码不影响数据。</div>
   </main>
 {_bottom_nav("more", "/")}
@@ -1150,9 +1220,10 @@ _RUNNER_CSS = """
     .edit-link { background:transparent; color:var(--accent-strong); box-shadow:none; min-height:30px; padding:2px 6px; font-size:13px; font-weight:600; }
     .wrapup { border:1px solid #cbe7d3; background:var(--pos-soft); border-radius:var(--radius); padding:14px; margin-top:16px; }
 
-    .main-actions { position:sticky; bottom:calc(10px + env(safe-area-inset-bottom,0px)); margin-top:18px; display:flex; gap:10px; align-items:center; background:rgba(255,255,255,.92); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border:1px solid var(--line); border-radius:14px; padding:10px; box-shadow:0 6px 24px rgba(31,35,40,.12); }
-    .main-actions button { flex:1; min-height:46px; }
-    .main-actions .status { flex-basis:100%; text-align:center; }
+    .main-actions { margin-top:18px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    .main-actions button { flex:1 1 40%; min-height:48px; }
+    .main-actions .status { flex-basis:100%; text-align:center; order:3; font-size:12.5px; color:var(--muted); }
+    .main-actions .status:empty { display:none; }
 
     .modal-backdrop { position:fixed; inset:0; z-index:70; display:none; align-items:center; justify-content:center; background:rgba(20,18,15,.4); padding:18px; }
     .modal-backdrop.open { display:flex; }
@@ -1170,14 +1241,8 @@ _RUNNER_CSS = """
     .voice-note .vops { flex:0 0 auto; display:flex; gap:2px; }
     .voice-note .vops button { min-height:28px; min-width:28px; padding:0; background:transparent; box-shadow:none; color:var(--muted); font-size:14px; }
 
-    #micBtn {
-      position:fixed; right:14px; bottom:calc(16px + env(safe-area-inset-bottom,0px)); z-index:60;
-      width:58px; height:58px; border-radius:999px; font-size:25px; padding:0;
-      background:var(--clay);
-      box-shadow:0 6px 22px rgba(208,94,0,.45);
-    }
-    #micBtn.rec { background:#a63a24; animation:elnMicPulse 1.1s ease infinite; }
-    @keyframes elnMicPulse { 50% { transform:scale(1.07); box-shadow:0 6px 26px rgba(198,40,40,.55); } }
+    #micBtn.rec { background:var(--clay); border-color:var(--clay); color:#fff; animation:elnMicPulse 1.2s ease infinite; }
+    @keyframes elnMicPulse { 50% { opacity:.7; } }
 
     .sheet-backdrop { position:fixed; inset:0; z-index:65; display:none; background:rgba(20,18,15,.4); }
     .sheet-backdrop.open { display:block; }
@@ -1219,6 +1284,7 @@ _RUNNER_BODY = """
       <select id="experimentSelect" onchange="selectExperiment(this.value)" aria-label="选择实验"></select>
     </div>
     <span id="net" class="status">连接中</span>
+    <button class="icon-btn" id="micBtn" onclick="openVoicePanel()" title="语音速记" aria-label="语音速记">__I_MIC__</button>
     <button class="icon-btn" onclick="loadExperiments()" title="刷新" aria-label="刷新">__I_REFRESH__</button>
     <button class="icon-btn" onclick="syncCurrentAndNow()" title="同步" aria-label="同步">__I_SYNC__</button>
   </header>
@@ -1238,7 +1304,6 @@ _RUNNER_BODY = """
     </div>
   </div>
 
-  <button id="micBtn" onclick="openVoicePanel()" title="语音速记" aria-label="语音速记">__I_MIC__</button>
   <div id="voiceBackdrop" class="sheet-backdrop" onclick="closeVoicePanel()"></div>
   <div id="voiceSheet" class="sheet">
     <div class="grab"></div>
@@ -2733,12 +2798,13 @@ def experiment_runner(experiment_id: Optional[int] = Query(None)):
     body = _RUNNER_BODY.replace("__ICON_JS__", web_ui.ICON_JS)
     body = _fill_icons(body, {
         "__I_HOME__": ("home", 18), "__I_REFRESH__": ("refresh", 18),
-        "__I_SYNC__": ("upload", 18), "__I_MIC__": ("mic", 24),
+        "__I_SYNC__": ("upload", 18), "__I_MIC__": ("mic", 18),
         "__I_SPARK__": ("sparkle", 17),
     })
     return _html_response(
-        web_ui.page_head("ELN 实验执行", _RUNNER_CSS)
+        web_ui.page_head("ELN 实验执行", _NAV_CSS + _RUNNER_CSS)
         + body
+        + _bottom_nav("run", "/")
         + web_ui.TIMER_DOCK_HTML
         + "\n</body>\n</html>",
         headers={"Cache-Control": "no-store, max-age=0"},
