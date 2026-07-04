@@ -120,12 +120,12 @@ _LOGIN_CSS = """
     body { min-height:100vh; display:grid; place-items:center; padding-bottom:0; }
     main { width:min(420px, calc(100vw - 32px)); background:var(--card); border:1px solid var(--line);
            border-radius:18px; padding:26px; box-shadow:var(--shadow); }
-    h1 { margin:0 0 4px; font-size:22px; }
+    h1 { margin:0 0 4px; font-size:21px; font-weight:600; }
     .sub { color:var(--muted); font-size:13.5px; margin:0 0 18px; }
     label { display:block; margin:0 0 8px; }
     input { margin-bottom:14px; }
-    .error { color:#b13232; font-weight:600; }
-    .hint { color:var(--muted); font-size:13px; margin-top:14px; line-height:1.5; }
+    .error { color:var(--neg); font-weight:500; }
+    .hint { color:var(--faint); font-size:12.5px; margin-top:14px; line-height:1.5; }
 """
 
 
@@ -136,7 +136,7 @@ def _login_page(next_path: str, error: str = "") -> HTMLResponse:
 {head}
 <body>
   <main>
-    <h1>🧪 ELN 实验记录</h1>
+    <h1>ELN 实验记录</h1>
     <p class="sub">输入访问密码继续</p>
     {error_html}
     <form method="post" action="/login">
@@ -340,30 +340,30 @@ def _flet_home_url(request: Request) -> str:
 
 def _bottom_nav(active: str, home_url: str) -> str:
     items = [
-        ("capture", "🎤", "速记", "/capture"),
-        ("inbox", "📥", "收件箱", "/inbox"),
-        ("run", "🧪", "实验", "/run"),
-        ("more", "⋯", "更多", home_url),
+        ("capture", "note", "速记", "/capture"),
+        ("inbox", "inbox", "收件箱", "/inbox"),
+        ("run", "flask", "实验", "/run"),
+        ("more", "more", "更多", home_url),
     ]
     cells = "".join(
         f'<a class="nav-cell{" active" if key == active else ""}" href="{href}">'
-        f'<span class="ni">{icon}</span><span class="nl">{label}</span></a>'
-        for key, icon, label, href in items
+        f'{web_ui.icon(ic, 22)}<span class="nl">{label}</span></a>'
+        for key, ic, label, href in items
     )
     return f'<nav class="bottom-nav">{cells}</nav>'
 
 
 _NAV_CSS = """
-    body { padding-bottom: calc(70px + env(safe-area-inset-bottom, 0px)); }
+    body { padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
     .bottom-nav { position:fixed; left:0; right:0; bottom:0; z-index:40; display:flex;
-      background:rgba(255,255,255,.94); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+      background:rgba(244,242,236,.92); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
       border-top:1px solid var(--line); padding-bottom:env(safe-area-inset-bottom,0px); }
-    .nav-cell { flex:1; display:flex; flex-direction:column; align-items:center; gap:2px;
-      padding:8px 0 7px; color:var(--muted); text-decoration:none; box-shadow:none; background:none;
+    .nav-cell { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
+      padding:9px 0 8px; color:var(--faint); text-decoration:none; box-shadow:none; background:none;
       min-height:0; border-radius:0; }
-    .nav-cell .ni { font-size:20px; line-height:1; }
-    .nav-cell .nl { font-size:11px; font-weight:600; }
-    .nav-cell.active { color:var(--accent-strong); }
+    .nav-cell .nl { font-size:11px; font-weight:500; }
+    .nav-cell svg.icon { stroke-width:1.7; }
+    .nav-cell.active { color:var(--clay-ink); }
 """
 
 _CAPTURE_CSS = _NAV_CSS + """
@@ -381,17 +381,18 @@ _CAPTURE_CSS = _NAV_CSS + """
       border-radius:999px; background:rgba(20,18,15,.6); color:#fff; font-size:13px; padding:0;
       display:flex; align-items:center; justify-content:center; box-shadow:none; }
     .cap-tools { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
-    .cap-tools .button, .cap-tools button { min-height:44px; }
+    .cap-tools .button, .cap-tools button { min-height:44px; flex:1; }
+    .thumb.ph { display:flex; align-items:center; justify-content:center; color:var(--faint); }
     input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
-    #micState { min-height:20px; color:var(--accent-strong); font-size:14px; margin-top:8px; }
-    #capMic.rec { background:linear-gradient(180deg,#e05555,#c62828); }
+    #micState { min-height:20px; color:var(--clay-ink); font-size:14px; margin-top:8px; }
+    #capMic.rec { background:var(--clay); border-color:var(--clay); color:#fff; }
     .archive-row { margin-top:16px; display:flex; gap:10px; }
-    .archive-row button { flex:1; min-height:50px; font-size:16px; }
-    .pending-head { display:flex; justify-content:space-between; align-items:center; margin:20px 2px 8px; }
-    .pending-head h2 { margin:0; font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
-    .pending-item { display:flex; gap:10px; background:#fbfaf7; border:1px solid var(--line);
+    .archive-row button { flex:1; min-height:50px; font-size:15.5px; }
+    .pending-head { display:flex; justify-content:space-between; align-items:center; margin:22px 2px 8px; }
+    .pending-head h2 { margin:0; font-size:12px; color:var(--faint); text-transform:none; letter-spacing:.04em; }
+    .pending-item { display:flex; gap:10px; background:var(--inset); border:1px solid var(--line);
       border-radius:12px; padding:10px; margin-bottom:8px; align-items:center; }
-    .pending-item .thumb { width:52px; height:52px; flex:0 0 auto; }
+    .pending-item .thumb { width:48px; height:48px; flex:0 0 auto; }
     .pending-item .pt { flex:1; min-width:0; font-size:14px; overflow-wrap:anywhere; }
     .pending-item .pm { font-size:12px; color:var(--muted); margin-top:2px; }
 """
@@ -399,39 +400,40 @@ _CAPTURE_CSS = _NAV_CSS + """
 _CAPTURE_BODY = """
 <body>
   <header class="app-bar">
-    <h1>🎤 速记捕捉</h1>
-    <a class="button secondary" href="/inbox" id="inboxLink">收件箱</a>
+    <h1>速记</h1>
+    <a class="button secondary" href="/inbox" id="inboxLink">__I_INBOX__ 收件箱<span id="inboxCount"></span></a>
   </header>
   <main>
     <section class="cap-card">
       <div class="field exp-pick">
         <label>属于哪个实验（可不选，交给 AI 判断）</label>
-        <select id="expPick"><option value="">— 不指定，让 AI 判断 —</option></select>
+        <select id="expPick"><option value="">让 AI 判断属于哪个实验</option></select>
       </div>
-      <textarea id="capText" placeholder="刚做了什么、看到了什么？直接打字，或点下面的 🎙 说出来。"></textarea>
+      <textarea id="capText" placeholder="刚做了什么、看到了什么？直接打字，或点下面的话筒说出来。"></textarea>
       <div id="micState"></div>
       <div class="thumbs" id="thumbs"></div>
       <div class="cap-tools">
-        <button id="capMic" class="secondary" onclick="toggleCapMic()">🎙 说</button>
-        <label class="button secondary" for="capCam">📷 拍照</label>
-        <label class="button secondary" for="capGal">相册</label>
+        <button id="capMic" class="secondary" onclick="toggleCapMic()">__I_MIC__<span id="capMicLabel">说</span></button>
+        <label class="button secondary" for="capCam">__I_CAM__ 拍照</label>
+        <label class="button secondary" for="capGal">__I_IMG__ 相册</label>
         <input id="capCam" type="file" accept="image/*" capture="environment" multiple onchange="addImages(this)" />
         <input id="capGal" type="file" accept="image/*" multiple onchange="addImages(this)" />
       </div>
       <div class="archive-row">
-        <button class="green" id="archiveBtn" onclick="archive()">📥 打包存档</button>
+        <button class="green" id="archiveBtn" onclick="archive()">__I_ARCH__ 打包存档</button>
       </div>
       <div class="small" id="capHint" style="margin-top:8px"></div>
     </section>
 
     <div class="pending-head">
       <h2>待归档</h2>
-      <a class="edit-link" href="/inbox">全部 →</a>
+      <a class="edit-link" href="/inbox">全部 __I_ARR__</a>
     </div>
     <div id="pendingList"></div>
   </main>
 __NAV__
 <script>
+__ICON_JS__
 const heldImages = [];   // File objects not yet uploaded
 const heldAudio = { blob: null };
 const capVoice = { rec: null, recognizing: false, mr: null, chunks: [] };
@@ -457,9 +459,10 @@ async function loadExperiments(){
 
 function renderThumbs(){
   const box = document.getElementById("thumbs");
+  const x = svgIcon("x", 13);
   box.innerHTML = heldImages.map((f, i) =>
-    `<span class="thumb"><img src="${URL.createObjectURL(f)}" /><button class="rm" onclick="rmImage(${i})">✕</button></span>`
-  ).join("") + (heldAudio.blob ? `<span class="thumb" style="display:flex;align-items:center;justify-content:center;font-size:22px">🎧<button class="rm" onclick="rmAudio()">✕</button></span>` : "");
+    `<span class="thumb"><img src="${URL.createObjectURL(f)}" /><button class="rm" onclick="rmImage(${i})">${x}</button></span>`
+  ).join("") + (heldAudio.blob ? `<span class="thumb" style="display:flex;align-items:center;justify-content:center;color:var(--muted)">${svgIcon("audio",24)}<button class="rm" onclick="rmAudio()">${x}</button></span>` : "");
 }
 function addImages(input){
   for(const f of input.files) heldImages.push(f);
@@ -478,7 +481,8 @@ function toggleCapMic(){
 function setMicUI(on){
   const b = document.getElementById("capMic");
   b.classList.toggle("rec", on);
-  b.textContent = on ? "🔴 停" : "🎙 说";
+  const lbl = document.getElementById("capMicLabel");
+  if(lbl) lbl.textContent = on ? "停" : "说";
 }
 function startCapSpeech(){
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -537,7 +541,7 @@ async function archive(){
     }
     document.getElementById("capText").value = "";
     heldImages.length = 0; heldAudio.blob = null; renderThumbs();
-    document.getElementById("capHint").textContent = "✓ 已存进收件箱";
+    document.getElementById("capHint").textContent = "已存进收件箱";
     setTimeout(()=>{ document.getElementById("capHint").textContent=""; }, 2500);
     loadPending();
   } catch(e){
@@ -548,13 +552,16 @@ async function archive(){
 async function loadPending(){
   try {
     const items = await api("/api/inbox?status=pending");
-    document.getElementById("inboxLink").textContent = items.length ? ("收件箱 "+items.length) : "收件箱";
+    const c = document.getElementById("inboxCount");
+    if(c) c.textContent = items.length ? (" " + items.length) : "";
     const box = document.getElementById("pendingList");
     if(!items.length){ box.innerHTML = '<div class="small" style="padding:0 2px">还没有待归档的速记。</div>'; return; }
     box.innerHTML = items.slice(0,6).map(it => {
-      const thumb = it.image_urls && it.image_urls[0] ? `<span class="thumb"><img src="${esc(it.image_urls[0])}"></span>` : "";
+      const thumb = it.image_urls && it.image_urls[0]
+        ? `<span class="thumb"><img src="${esc(it.image_urls[0])}"></span>`
+        : `<span class="thumb ph">${svgIcon(it.audio_url && !it.text ? "audio" : "note", 20)}</span>`;
       const t = new Date(it.created_at); const hh = String(t.getHours()).padStart(2,"0")+":"+String(t.getMinutes()).padStart(2,"0");
-      const body = it.text ? esc(it.text) : (it.audio_url ? "🎧 语音" : "📷 图片");
+      const body = it.text ? esc(it.text) : (it.audio_url ? "语音" : "图片");
       return `<div class="pending-item">${thumb}<div class="pt">${body}<div class="pm">${hh}${it.hinted_experiment_id?" · 已标实验":""}</div></div></div>`;
     }).join("");
   } catch {}
@@ -568,13 +575,23 @@ loadPending();
 """
 
 
+def _fill_icons(body: str, mapping: dict) -> str:
+    for ph, (name, size) in mapping.items():
+        body = body.replace(ph, web_ui.icon(name, size))
+    return body
+
+
 @app.get("/capture", response_class=HTMLResponse)
 def capture_page(request: Request):
-    html = (
-        web_ui.page_head("速记捕捉 · ELN", _CAPTURE_CSS)
-        + _CAPTURE_BODY.replace("__NAV__", _bottom_nav("capture", _flet_home_url(request)))
-    )
-    return _html_response(html, headers={"Cache-Control": "no-store, max-age=0"})
+    body = _CAPTURE_BODY.replace("__ICON_JS__", web_ui.ICON_JS)
+    body = _fill_icons(body, {
+        "__I_INBOX__": ("inbox", 17), "__I_MIC__": ("mic", 18),
+        "__I_CAM__": ("camera", 18), "__I_IMG__": ("image", 18),
+        "__I_ARCH__": ("check", 18), "__I_ARR__": ("arrow-right", 15),
+    })
+    body = body.replace("__NAV__", _bottom_nav("capture", _flet_home_url(request)))
+    return _html_response(web_ui.page_head("速记 · ELN", _CAPTURE_CSS) + body,
+                          headers={"Cache-Control": "no-store, max-age=0"})
 
 
 _INBOX_CSS = _NAV_CSS + """
@@ -587,9 +604,10 @@ _INBOX_CSS = _NAV_CSS + """
     .entry .emedia a { width:88px; height:88px; border-radius:10px; overflow:hidden; border:1px solid var(--line); display:block; }
     .entry .emedia img { width:100%; height:100%; object-fit:cover; }
     .entry audio { width:100%; max-width:360px; margin-top:6px; }
-    .ai-sug { border:1px solid #cdbff0; background:#f4f0ff; border-radius:12px; padding:10px 12px; margin:10px 0; }
-    .ai-sug .lbl { font-size:12px; font-weight:700; color:#5a45c8; }
-    .ai-sug .rs { font-size:12px; color:#6b665e; margin-top:3px; overflow-wrap:anywhere; }
+    .ai-sug { border:1px solid var(--clay-line); background:var(--clay-soft); border-radius:12px; padding:10px 12px; margin:10px 0; color:var(--clay-ink); font-size:13.5px; line-height:1.5; }
+    .ai-sug .lbl { display:inline-flex; align-items:center; gap:4px; font-weight:500; }
+    .ai-sug .lbl svg { stroke-width:1.75; }
+    .ai-sug .rs { font-size:12px; color:#8a5a44; margin-top:4px; overflow-wrap:anywhere; }
     .file-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
     .file-row select { min-height:42px; }
     .entry .etext-edit { min-height:64px; margin-top:8px; }
@@ -602,9 +620,9 @@ _INBOX_CSS = _NAV_CSS + """
 _INBOX_BODY = """
 <body>
   <header class="app-bar">
-    <a class="button secondary" href="/capture">← 速记</a>
-    <h1>📥 收件箱</h1>
-    <button class="icon-btn" onclick="loadAll()" title="刷新" style="min-height:40px;min-width:40px;background:#f1efeb;color:#43413d;box-shadow:none">⟳</button>
+    <a class="button secondary" href="/capture">__I_BACK__ 速记</a>
+    <h1>收件箱</h1>
+    <button class="icon-btn" onclick="loadAll()" title="刷新" aria-label="刷新">__I_REFRESH__</button>
   </header>
   <main>
     <div id="topHint">待归档的速记在这里。选好实验和步骤后「写入记录」；AI 归档后这里会显示它的建议供你确认。</div>
@@ -612,6 +630,7 @@ _INBOX_BODY = """
   </main>
 __NAV__
 <script>
+__ICON_JS__
 let experiments = [];
 const stepsCache = {};
 
@@ -635,7 +654,7 @@ async function loadAll(){
   let items = [];
   try { items = await api("/api/inbox?status=pending"); } catch {}
   const root = document.getElementById("entries");
-  if(!items.length){ root.innerHTML = '<div class="empty">🎉 收件箱空了，都归档好了。</div>'; return; }
+  if(!items.length){ root.innerHTML = '<div class="empty">收件箱空了，都归档好了。</div>'; return; }
   root.innerHTML = "";
   for(const it of items){ root.appendChild(await renderEntry(it)); }
 }
@@ -661,7 +680,7 @@ async function renderEntry(it){
   if(prop){
     const en = experiments.find(e=>String(e.id)===String(prop.experiment_id));
     const fieldsTxt = (prop.fields||[]).map(f=>`${esc(f.key)}=${esc(f.value)}`).join("，");
-    sug = `<div class="ai-sug"><span class="lbl">✨ AI 建议</span>：放到 <b>${en?esc(en.name):("实验"+prop.experiment_id)}</b>`
+    sug = `<div class="ai-sug"><span class="lbl">${svgIcon("sparkle",15)}AI 建议</span>：放到 <b>${en?esc(en.name):("实验"+prop.experiment_id)}</b>`
         + (prop.step_id?` · 步骤#${prop.step_id}`:"")
         + (fieldsTxt?` · 字段 ${fieldsTxt}`:"")
         + (prop.reason?`<div class="rs">依据：${esc(prop.reason)}</div>`:"")
@@ -680,9 +699,9 @@ async function renderEntry(it){
       <select id="step-${it.id}"><option value="">选择步骤…</option></select>
     </div>
     <div class="entry-actions">
-      <button class="green" onclick="applyEntry(${it.id})">写入记录 ✓</button>
+      <button class="green" onclick="applyEntry(${it.id})">${svgIcon("check",17)}写入记录</button>
       <button class="secondary" onclick="dismissEntry(${it.id})">忽略</button>
-      <button class="danger-ghost" onclick="deleteEntry(${it.id})">删除</button>
+      <button class="danger-ghost" onclick="deleteEntry(${it.id})">${svgIcon("trash",16)}删除</button>
       <span class="small" id="es-${it.id}"></span>
     </div>`;
 
@@ -739,11 +758,13 @@ setInterval(loadAll, 12000);
 
 @app.get("/inbox", response_class=HTMLResponse)
 def inbox_page(request: Request):
-    html = (
-        web_ui.page_head("收件箱 · ELN", _INBOX_CSS)
-        + _INBOX_BODY.replace("__NAV__", _bottom_nav("inbox", _flet_home_url(request)))
-    )
-    return _html_response(html, headers={"Cache-Control": "no-store, max-age=0"})
+    body = _INBOX_BODY.replace("__ICON_JS__", web_ui.ICON_JS)
+    body = _fill_icons(body, {
+        "__I_BACK__": ("chevron-left", 18), "__I_REFRESH__": ("refresh", 18),
+    })
+    body = body.replace("__NAV__", _bottom_nav("inbox", _flet_home_url(request)))
+    return _html_response(web_ui.page_head("收件箱 · ELN", _INBOX_CSS) + body,
+                          headers={"Cache-Control": "no-store, max-age=0"})
 
 
 # ─────────────────────────────────────────────
@@ -775,12 +796,12 @@ _RUNNER_CSS = """
       background:#efece7; color:#7a756d; font-weight:700; font-size:13.5px; box-shadow:none;
     }
     .chip.done { background:var(--green-soft); color:#1d6f3f; }
-    .chip.cur { background:linear-gradient(180deg,#f28118,var(--accent-strong)); color:#fff; box-shadow:0 1px 4px rgba(208,94,0,.4); }
+    .chip.cur { background:var(--clay); color:#fff; }
 
     .stepper { display:flex; align-items:center; gap:12px; margin:2px 0 10px; }
     .stepper button { min-width:76px; min-height:38px; }
     .progress { flex:1; height:7px; border-radius:999px; background:#eceae4; overflow:hidden; }
-    .progress > div { height:100%; border-radius:999px; background:linear-gradient(90deg,#f5a34c,var(--accent)); transition:width .25s ease; }
+    .progress > div { height:100%; border-radius:999px; background:var(--clay); transition:width .25s ease; }
 
     .step-title { font-size:20px; font-weight:800; line-height:1.3; margin:2px 0 4px; letter-spacing:.01em; }
     .desc { line-height:1.65; color:#3c3934; font-size:15px; }
@@ -818,11 +839,11 @@ _RUNNER_CSS = """
     .attachment-caption > a { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
     .attachment-rename { width:28px; height:28px; min-height:28px; padding:0; border-radius:7px; background:transparent; color:var(--accent-strong); font-size:16px; box-shadow:none; }
 
-    .timer { border:1px solid #f6ddba; background:linear-gradient(180deg,#fff9f0,#fdf3e3); border-radius:var(--radius); padding:14px; margin-top:14px; }
+    .timer { border:1px solid #f6ddba; background:var(--inset); border-radius:var(--radius); padding:14px; margin-top:14px; }
     .timer-display { font-size:40px; font-weight:800; color:var(--accent-strong); font-variant-numeric:tabular-nums; line-height:1.1; }
     .timer-edit { display:flex; gap:8px; align-items:center; margin-top:6px; }
     .timer-edit input { width:110px; }
-    .timer.over { background:linear-gradient(180deg,#fdf0f0,#fbe4e4); border-color:#f0bcbc; }
+    .timer.over { background:var(--neg-soft); border-color:#e8cabf; }
     .timer.over .timer-display { color:var(--red); }
     .timer .actions { margin-top:10px; }
     .timer .actions button { min-height:40px; min-width:72px; }
@@ -830,7 +851,7 @@ _RUNNER_CSS = """
     .section-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:16px; }
     .section-head h2 { margin:0; font-size:13px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.06em; }
     .edit-link { background:transparent; color:var(--accent-strong); box-shadow:none; min-height:30px; padding:2px 6px; font-size:13px; font-weight:600; }
-    .wrapup { border:1px solid #cbe7d3; background:linear-gradient(180deg,#f4fbf6,#e9f7ee); border-radius:var(--radius); padding:14px; margin-top:16px; }
+    .wrapup { border:1px solid #cbe7d3; background:var(--pos-soft); border-radius:var(--radius); padding:14px; margin-top:16px; }
 
     .main-actions { position:sticky; bottom:calc(10px + env(safe-area-inset-bottom,0px)); margin-top:18px; display:flex; gap:10px; align-items:center; background:rgba(255,255,255,.92); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border:1px solid var(--line); border-radius:14px; padding:10px; box-shadow:0 6px 24px rgba(31,35,40,.12); }
     .main-actions button { flex:1; min-height:46px; }
@@ -855,10 +876,10 @@ _RUNNER_CSS = """
     #micBtn {
       position:fixed; right:14px; bottom:calc(16px + env(safe-area-inset-bottom,0px)); z-index:60;
       width:58px; height:58px; border-radius:999px; font-size:25px; padding:0;
-      background:linear-gradient(180deg,#f28118,var(--accent-strong));
+      background:var(--clay);
       box-shadow:0 6px 22px rgba(208,94,0,.45);
     }
-    #micBtn.rec { background:linear-gradient(180deg,#e05555,#c62828); animation:elnMicPulse 1.1s ease infinite; }
+    #micBtn.rec { background:#a63a24; animation:elnMicPulse 1.1s ease infinite; }
     @keyframes elnMicPulse { 50% { transform:scale(1.07); box-shadow:0 6px 26px rgba(198,40,40,.55); } }
 
     .sheet-backdrop { position:fixed; inset:0; z-index:65; display:none; background:rgba(20,18,15,.4); }
@@ -889,20 +910,20 @@ _RUNNER_CSS = """
     .ai-applied { color:var(--green); font-weight:700; font-size:12.5px; margin-top:6px; }
     .voice-controls { display:flex; gap:10px; align-items:center; margin-top:10px; }
     .voice-controls button { flex:1; min-height:46px; }
-    #voiceRecBtn.rec { background:linear-gradient(180deg,#e05555,#c62828); }
+    #voiceRecBtn.rec { background:#a63a24; }
     .voice-all { margin-top:16px; }
 """
 
 _RUNNER_BODY = """
 <body>
   <header class="app-bar">
-    <a class="icon-btn" id="backToFlet" href="/" aria-label="返回首页">🏠</a>
+    <a class="icon-btn" id="backToFlet" href="/" aria-label="返回首页">__I_HOME__</a>
     <div class="exp-wrap">
       <select id="experimentSelect" onchange="selectExperiment(this.value)" aria-label="选择实验"></select>
     </div>
     <span id="net" class="status">连接中</span>
-    <button class="icon-btn" onclick="loadExperiments()" title="刷新" aria-label="刷新">⟳</button>
-    <button class="icon-btn" onclick="syncCurrentAndNow()" title="同步" aria-label="同步">↑</button>
+    <button class="icon-btn" onclick="loadExperiments()" title="刷新" aria-label="刷新">__I_REFRESH__</button>
+    <button class="icon-btn" onclick="syncCurrentAndNow()" title="同步" aria-label="同步">__I_SYNC__</button>
   </header>
   <main>
     <div id="queueInfo" class="queue-info"></div>
@@ -920,11 +941,11 @@ _RUNNER_BODY = """
     </div>
   </div>
 
-  <button id="micBtn" onclick="openVoicePanel()" title="语音速记" aria-label="语音速记">🎤</button>
+  <button id="micBtn" onclick="openVoicePanel()" title="语音速记" aria-label="语音速记">__I_MIC__</button>
   <div id="voiceBackdrop" class="sheet-backdrop" onclick="closeVoicePanel()"></div>
   <div id="voiceSheet" class="sheet">
     <div class="grab"></div>
-    <h2>🎤 语音速记</h2>
+    <h2>语音速记</h2>
     <div class="small" id="voiceHint"></div>
     <div id="voiceLive"></div>
     <textarea id="voiceText" placeholder="说完的内容出现在这里，可以先修改再保存"></textarea>
@@ -933,7 +954,7 @@ _RUNNER_BODY = """
       <button class="green" onclick="saveVoiceText()">存入当前步骤</button>
     </div>
     <div class="voice-controls" style="margin-top:8px">
-      <button class="secondary" style="background:linear-gradient(180deg,#6d5ae0,#5a45c8);color:#fff;box-shadow:none" onclick="runAiOrganize()">✨ AI 整理全部速记</button>
+      <button class="secondary" onclick="runAiOrganize()">__I_SPARK__ AI 整理全部速记</button>
     </div>
     <div class="small" id="aiHint" style="margin-top:4px"></div>
     <div class="voice-all">
@@ -945,7 +966,7 @@ _RUNNER_BODY = """
   <div id="aiBackdrop" class="sheet-backdrop" onclick="closeAiPanel()"></div>
   <div id="aiSheet" class="sheet">
     <div class="grab"></div>
-    <h2>✨ AI 整理草稿</h2>
+    <h2>AI 整理草稿</h2>
     <div class="small" id="aiDraftHint">AI 已把你的口语整理成下面的草稿。确认无误再写入记录，数字类字段请核对。</div>
     <div id="aiDraftBody"></div>
     <div class="voice-controls">
@@ -955,6 +976,7 @@ _RUNNER_BODY = """
   </div>
 
 <script>
+__ICON_JS__
 const LS = {
   experiments: "eln.mobile.experiments",
   selected: "eln.mobile.selectedExperiment",
@@ -1233,7 +1255,7 @@ function renderAttachments(step, attachments){
     const renameButton = `<button type="button" class="attachment-rename"
       title="修改附件名称" aria-label="修改 ${esc(item.name)} 的名称"
       data-step-id="${step.id}" data-path="${esc(item.path)}" data-name="${esc(item.name)}"
-      onclick="renameAttachment(this)">✎</button>`;
+      onclick="renameAttachment(this)">${svgIcon("pencil",15)}</button>`;
     if(isImageAttachment(item.path)){
       return `<span class="attachment-item image">
         <a class="attachment-preview" href="${esc(url)}" target="_blank" rel="noopener" title="打开原图">
@@ -1286,7 +1308,7 @@ function jumpStep(i){ setCurrentStepIndex(i); renderSteps(steps); }
 function renderSteps(items){
   const root = document.getElementById("steps");
   root.innerHTML = "";
-  if(!items.length){ root.innerHTML = '<div class="card small">暂无缓存步骤。联网后点右上角 ⟳ 刷新。</div>'; return; }
+  if(!items.length){ root.innerHTML = '<div class="card small">暂无缓存步骤。联网后点右上角刷新按钮。</div>'; return; }
   steps = items;
   const idx = currentStepIndex();
   const step = items[idx];
@@ -1318,7 +1340,7 @@ function renderSteps(items){
   const photos = renderAttachments(step, attachments);
   const timerBlock = totalSeconds > 0 ? `
     <div class="timer" id="timer-box-${step.id}">
-      <div class="small">⏱ 步骤计时 · 电脑端负责响铃</div>
+      <div class="small">步骤计时 · 电脑端负责响铃</div>
       <div class="timer-display" id="timer-display-${step.id}">${fmt(totalSeconds)}</div>
       <div class="field timer-edit">
         <input type="number" min="0" step="0.1" value="${timerMinutes(totalSeconds)}" onchange="saveTimerOverride(${step.experiment_id}, ${step.id}, this.value)" ${step.completed_at ? "disabled" : ""} />
@@ -1337,7 +1359,7 @@ function renderSteps(items){
       <label>附件 / 拍照记录</label>
       <div class="photos">${photos || '<span class="small">暂无附件</span>'}</div>
       <form class="photo-row" onsubmit="uploadPhoto(event, ${step.id})">
-        <label class="button" for="cam-${step.id}">📷 拍照</label>
+        <label class="button" for="cam-${step.id}">${svgIcon("camera",17)} 拍照</label>
         <label class="button secondary" for="gal-${step.id}">相册</label>
         <label class="button secondary" for="any-${step.id}">文件</label>
         <button type="button" class="secondary" onclick="pasteClipboard(${step.id})">剪贴板</button>
@@ -1374,7 +1396,7 @@ function renderSteps(items){
     </div>
     <div class="section-head" style="margin-top:2px">
       <div class="step-title">${esc(step.title)}</div>
-      <button class="edit-link" onclick="editStepText(${step.id}, 'title', '修改步骤标题')">✎</button>
+      <button class="edit-link" onclick="editStepText(${step.id}, 'title', '修改步骤标题')">${svgIcon("pencil",15)}</button>
     </div>
     <div class="section-head">
       <h2>步骤说明</h2>
@@ -2068,11 +2090,11 @@ function renderStepVoice(step){
   const list = voiceNotes.filter(n => n.step_id === step.id);
   const inner = list.length
     ? list.map(voiceNoteHtml).join("")
-    : '<span class="small">点右下角 🎤，边做边说，说完的话自动记进这一步。</span>';
+    : '<span class="small">点右下角话筒，边做边说，说完的话自动记进这一步。</span>';
   return `
     <div class="section-head">
       <h2>语音速记</h2>
-      <button class="edit-link" onclick="openVoicePanel()">🎤 说一段</button>
+      <button class="edit-link" onclick="openVoicePanel()">说一段</button>
     </div>
     <div class="voice-list">${inner}</div>`;
 }
@@ -2191,7 +2213,7 @@ function startSpeech(){
   };
   voiceState.recognition = rec;
   voiceState.recognizing = true;
-  setRecUI(true, "🔴 停止听写");
+  setRecUI(true, "停止听写");
   try { rec.start(); } catch {}
 }
 
@@ -2214,7 +2236,7 @@ async function startRecording(){
     };
     voiceState.mediaRecorder = mr;
     mr.start();
-    setRecUI(true, "🔴 停止录音");
+    setRecUI(true, "停止录音");
   } catch(e) {
     document.getElementById("voiceHint").textContent = "无法打开麦克风：" + e.message;
   }
@@ -2411,9 +2433,15 @@ initVoice();
 @app.get("/run", response_class=HTMLResponse)
 @app.get("/mobile", response_class=HTMLResponse)
 def experiment_runner(experiment_id: Optional[int] = Query(None)):
+    body = _RUNNER_BODY.replace("__ICON_JS__", web_ui.ICON_JS)
+    body = _fill_icons(body, {
+        "__I_HOME__": ("home", 18), "__I_REFRESH__": ("refresh", 18),
+        "__I_SYNC__": ("upload", 18), "__I_MIC__": ("mic", 24),
+        "__I_SPARK__": ("sparkle", 17),
+    })
     return _html_response(
         web_ui.page_head("ELN 实验执行", _RUNNER_CSS)
-        + _RUNNER_BODY
+        + body
         + web_ui.TIMER_DOCK_HTML
         + "\n</body>\n</html>",
         headers={"Cache-Control": "no-store, max-age=0"},
