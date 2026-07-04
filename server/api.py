@@ -27,6 +27,8 @@ from server import web_ui
 from utils.report_generator import generate_report
 from utils.i18n import localize_html
 
+STEP_NOTES_KEY = "__eln_step_notes"
+
 app = FastAPI(title="ELN API", version="1.0.0")
 
 app.add_middleware(
@@ -315,6 +317,433 @@ class VoiceNoteUpdate(BaseModel):
 @app.get("/api/health")
 def health():
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/", response_class=HTMLResponse)
+def root():
+    """Web-only entry point: land on the capture page (速记)."""
+    return RedirectResponse("/capture", status_code=302)
+
+
+# ─────────────────────────────────────────────
+# Capture inbox (速记) — default landing page
+# ─────────────────────────────────────────────
+
+def _flet_home_url(request: Request) -> str:
+    """Best-effort URL back to the Flet shell (port 8550) for the other tabs."""
+    host = request.url.hostname or "127.0.0.1"
+    if request.url.scheme == "https" or os.environ.get("ELN_NATIVE_ONLY") == "1":
+        return "/run"  # public tunnel only exposes native pages
+    display = f"[{host}]" if ":" in host else host
+    return f"{request.url.scheme}://{display}:8550/"
+
+
+def _bottom_nav(active: str, home_url: str) -> str:
+    items = [
+        ("capture", "🎤", "速记", "/capture"),
+        ("inbox", "📥", "收件箱", "/inbox"),
+        ("run", "🧪", "实验", "/run"),
+        ("more", "⋯", "更多", home_url),
+    ]
+    cells = "".join(
+        f'<a class="nav-cell{" active" if key == active else ""}" href="{href}">'
+        f'<span class="ni">{icon}</span><span class="nl">{label}</span></a>'
+        for key, icon, label, href in items
+    )
+    return f'<nav class="bottom-nav">{cells}</nav>'
+
+
+_NAV_CSS = """
+    body { padding-bottom: calc(70px + env(safe-area-inset-bottom, 0px)); }
+    .bottom-nav { position:fixed; left:0; right:0; bottom:0; z-index:40; display:flex;
+      background:rgba(255,255,255,.94); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+      border-top:1px solid var(--line); padding-bottom:env(safe-area-inset-bottom,0px); }
+    .nav-cell { flex:1; display:flex; flex-direction:column; align-items:center; gap:2px;
+      padding:8px 0 7px; color:var(--muted); text-decoration:none; box-shadow:none; background:none;
+      min-height:0; border-radius:0; }
+    .nav-cell .ni { font-size:20px; line-height:1; }
+    .nav-cell .nl { font-size:11px; font-weight:600; }
+    .nav-cell.active { color:var(--accent-strong); }
+"""
+
+_CAPTURE_CSS = _NAV_CSS + """
+    main { max-width:720px; }
+    .cap-card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+      padding:16px; box-shadow:var(--shadow); }
+    #capText { min-height:120px; font-size:16px; }
+    .exp-pick { margin-bottom:12px; }
+    .exp-pick label { display:block; margin-bottom:5px; }
+    .thumbs { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+    .thumb { position:relative; width:76px; height:76px; border-radius:10px; overflow:hidden;
+      border:1px solid var(--line); background:#f3f1ec; }
+    .thumb img { width:100%; height:100%; object-fit:cover; }
+    .thumb .rm { position:absolute; top:2px; right:2px; width:22px; height:22px; min-height:0;
+      border-radius:999px; background:rgba(20,18,15,.6); color:#fff; font-size:13px; padding:0;
+      display:flex; align-items:center; justify-content:center; box-shadow:none; }
+    .cap-tools { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+    .cap-tools .button, .cap-tools button { min-height:44px; }
+    input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
+    #micState { min-height:20px; color:var(--accent-strong); font-size:14px; margin-top:8px; }
+    #capMic.rec { background:linear-gradient(180deg,#e05555,#c62828); }
+    .archive-row { margin-top:16px; display:flex; gap:10px; }
+    .archive-row button { flex:1; min-height:50px; font-size:16px; }
+    .pending-head { display:flex; justify-content:space-between; align-items:center; margin:20px 2px 8px; }
+    .pending-head h2 { margin:0; font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+    .pending-item { display:flex; gap:10px; background:#fbfaf7; border:1px solid var(--line);
+      border-radius:12px; padding:10px; margin-bottom:8px; align-items:center; }
+    .pending-item .thumb { width:52px; height:52px; flex:0 0 auto; }
+    .pending-item .pt { flex:1; min-width:0; font-size:14px; overflow-wrap:anywhere; }
+    .pending-item .pm { font-size:12px; color:var(--muted); margin-top:2px; }
+"""
+
+_CAPTURE_BODY = """
+<body>
+  <header class="app-bar">
+    <h1>🎤 速记捕捉</h1>
+    <a class="button secondary" href="/inbox" id="inboxLink">收件箱</a>
+  </header>
+  <main>
+    <section class="cap-card">
+      <div class="field exp-pick">
+        <label>属于哪个实验（可不选，交给 AI 判断）</label>
+        <select id="expPick"><option value="">— 不指定，让 AI 判断 —</option></select>
+      </div>
+      <textarea id="capText" placeholder="刚做了什么、看到了什么？直接打字，或点下面的 🎙 说出来。"></textarea>
+      <div id="micState"></div>
+      <div class="thumbs" id="thumbs"></div>
+      <div class="cap-tools">
+        <button id="capMic" class="secondary" onclick="toggleCapMic()">🎙 说</button>
+        <label class="button secondary" for="capCam">📷 拍照</label>
+        <label class="button secondary" for="capGal">相册</label>
+        <input id="capCam" type="file" accept="image/*" capture="environment" multiple onchange="addImages(this)" />
+        <input id="capGal" type="file" accept="image/*" multiple onchange="addImages(this)" />
+      </div>
+      <div class="archive-row">
+        <button class="green" id="archiveBtn" onclick="archive()">📥 打包存档</button>
+      </div>
+      <div class="small" id="capHint" style="margin-top:8px"></div>
+    </section>
+
+    <div class="pending-head">
+      <h2>待归档</h2>
+      <a class="edit-link" href="/inbox">全部 →</a>
+    </div>
+    <div id="pendingList"></div>
+  </main>
+__NAV__
+<script>
+const heldImages = [];   // File objects not yet uploaded
+const heldAudio = { blob: null };
+const capVoice = { rec: null, recognizing: false, mr: null, chunks: [] };
+
+function esc(v){ return String(v ?? "").replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
+async function api(path, opts={}){
+  const res = await fetch(path, {headers:{"Content-Type":"application/json", ...(opts.headers||{})}, ...opts});
+  if(!res.ok) throw new Error(await res.text());
+  return res.status === 204 ? null : await res.json();
+}
+
+async function loadExperiments(){
+  try {
+    const exps = await api("/api/experiment_summaries");
+    const sel = document.getElementById("expPick");
+    for(const e of exps){
+      const o = document.createElement("option");
+      o.value = e.id; o.textContent = e.name + " · " + e.completed_steps + "/" + e.total_steps;
+      sel.appendChild(o);
+    }
+  } catch {}
+}
+
+function renderThumbs(){
+  const box = document.getElementById("thumbs");
+  box.innerHTML = heldImages.map((f, i) =>
+    `<span class="thumb"><img src="${URL.createObjectURL(f)}" /><button class="rm" onclick="rmImage(${i})">✕</button></span>`
+  ).join("") + (heldAudio.blob ? `<span class="thumb" style="display:flex;align-items:center;justify-content:center;font-size:22px">🎧<button class="rm" onclick="rmAudio()">✕</button></span>` : "");
+}
+function addImages(input){
+  for(const f of input.files) heldImages.push(f);
+  input.value = "";
+  renderThumbs();
+}
+function rmImage(i){ heldImages.splice(i,1); renderThumbs(); }
+function rmAudio(){ heldAudio.blob = null; renderThumbs(); }
+
+function speechSupported(){ return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
+
+function toggleCapMic(){
+  if(capVoice.recognizing || capVoice.mr){ stopCapMic(); return; }
+  if(speechSupported()) startCapSpeech(); else startCapRecord();
+}
+function setMicUI(on){
+  const b = document.getElementById("capMic");
+  b.classList.toggle("rec", on);
+  b.textContent = on ? "🔴 停" : "🎙 说";
+}
+function startCapSpeech(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const rec = new SR(); rec.lang="zh-CN"; rec.continuous=true; rec.interimResults=true;
+  const live = document.getElementById("micState");
+  rec.onresult = e => {
+    let interim="";
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      const r=e.results[i];
+      if(r.isFinal){ const t=r[0].transcript.trim(); if(t){ const ta=document.getElementById("capText"); ta.value=(ta.value?ta.value+" ":"")+t; } }
+      else interim+=r[0].transcript;
+    }
+    live.textContent = interim;
+  };
+  rec.onend = () => { if(capVoice.recognizing){ try{rec.start();}catch{ capVoice.recognizing=false; setMicUI(false);} } };
+  rec.onerror = ev => { live.textContent=""; if(ev.error==="not-allowed"){ capVoice.recognizing=false; capVoice.rec=null; setMicUI(false); document.getElementById("capHint").textContent="麦克风被拒绝，可改用键盘听写。"; } };
+  capVoice.rec=rec; capVoice.recognizing=true; setMicUI(true);
+  try{ rec.start(); }catch{}
+}
+async function startCapRecord(){
+  if(!(navigator.mediaDevices && window.MediaRecorder)){ document.getElementById("capHint").textContent="此环境不支持录音，请打字。"; return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    const mr = new MediaRecorder(stream); capVoice.chunks=[];
+    mr.ondataavailable = e => { if(e.data && e.data.size) capVoice.chunks.push(e.data); };
+    mr.onstop = () => { stream.getTracks().forEach(t=>t.stop()); const type=mr.mimeType||"audio/mp4"; const blob=new Blob(capVoice.chunks,{type}); capVoice.chunks=[]; if(blob.size>0){ heldAudio.blob=blob; renderThumbs(); document.getElementById("capHint").textContent="已录一段语音，存档后可在电脑端转写。"; } };
+    capVoice.mr=mr; mr.start(); setMicUI(true);
+  } catch(e){ document.getElementById("capHint").textContent="无法录音："+e.message; }
+}
+function stopCapMic(){
+  if(capVoice.rec){ capVoice.recognizing=false; try{capVoice.rec.stop();}catch{} capVoice.rec=null; }
+  if(capVoice.mr){ try{capVoice.mr.stop();}catch{} capVoice.mr=null; }
+  document.getElementById("micState").textContent="";
+  setMicUI(false);
+}
+
+async function archive(){
+  stopCapMic();
+  const text = document.getElementById("capText").value.trim();
+  if(!text && !heldImages.length && !heldAudio.blob){ document.getElementById("capHint").textContent="先说点什么、拍张照，或打段字。"; return; }
+  const btn = document.getElementById("archiveBtn");
+  btn.disabled = true; document.getElementById("capHint").textContent = "存档中…";
+  try {
+    const hint = document.getElementById("expPick").value;
+    const entry = await api("/api/inbox", {method:"POST", body: JSON.stringify({text, hinted_experiment_id: hint ? Number(hint) : null})});
+    for(const f of heldImages){
+      const fd = new FormData(); fd.append("file", f); fd.append("kind", "image");
+      await fetch(`/api/inbox/${entry.id}/media`, {method:"POST", body:fd});
+    }
+    if(heldAudio.blob){
+      const fd = new FormData();
+      const ext = (heldAudio.blob.type||"").includes("mp4") ? ".m4a" : ".webm";
+      fd.append("file", new File([heldAudio.blob], "voice"+ext, {type:heldAudio.blob.type}));
+      fd.append("kind", "audio");
+      await fetch(`/api/inbox/${entry.id}/media`, {method:"POST", body:fd});
+    }
+    document.getElementById("capText").value = "";
+    heldImages.length = 0; heldAudio.blob = null; renderThumbs();
+    document.getElementById("capHint").textContent = "✓ 已存进收件箱";
+    setTimeout(()=>{ document.getElementById("capHint").textContent=""; }, 2500);
+    loadPending();
+  } catch(e){
+    document.getElementById("capHint").textContent = "存档失败："+(e.message||e);
+  } finally { btn.disabled = false; }
+}
+
+async function loadPending(){
+  try {
+    const items = await api("/api/inbox?status=pending");
+    document.getElementById("inboxLink").textContent = items.length ? ("收件箱 "+items.length) : "收件箱";
+    const box = document.getElementById("pendingList");
+    if(!items.length){ box.innerHTML = '<div class="small" style="padding:0 2px">还没有待归档的速记。</div>'; return; }
+    box.innerHTML = items.slice(0,6).map(it => {
+      const thumb = it.image_urls && it.image_urls[0] ? `<span class="thumb"><img src="${esc(it.image_urls[0])}"></span>` : "";
+      const t = new Date(it.created_at); const hh = String(t.getHours()).padStart(2,"0")+":"+String(t.getMinutes()).padStart(2,"0");
+      const body = it.text ? esc(it.text) : (it.audio_url ? "🎧 语音" : "📷 图片");
+      return `<div class="pending-item">${thumb}<div class="pt">${body}<div class="pm">${hh}${it.hinted_experiment_id?" · 已标实验":""}</div></div></div>`;
+    }).join("");
+  } catch {}
+}
+
+loadExperiments();
+loadPending();
+</script>
+</body>
+</html>
+"""
+
+
+@app.get("/capture", response_class=HTMLResponse)
+def capture_page(request: Request):
+    html = (
+        web_ui.page_head("速记捕捉 · ELN", _CAPTURE_CSS)
+        + _CAPTURE_BODY.replace("__NAV__", _bottom_nav("capture", _flet_home_url(request)))
+    )
+    return _html_response(html, headers={"Cache-Control": "no-store, max-age=0"})
+
+
+_INBOX_CSS = _NAV_CSS + """
+    main { max-width:760px; }
+    .entry { background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+      padding:14px; box-shadow:var(--shadow); margin-bottom:14px; }
+    .entry .etime { font-size:12px; color:var(--muted); }
+    .entry .etext { font-size:15px; margin:6px 0; overflow-wrap:anywhere; white-space:pre-wrap; }
+    .entry .emedia { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+    .entry .emedia a { width:88px; height:88px; border-radius:10px; overflow:hidden; border:1px solid var(--line); display:block; }
+    .entry .emedia img { width:100%; height:100%; object-fit:cover; }
+    .entry audio { width:100%; max-width:360px; margin-top:6px; }
+    .ai-sug { border:1px solid #cdbff0; background:#f4f0ff; border-radius:12px; padding:10px 12px; margin:10px 0; }
+    .ai-sug .lbl { font-size:12px; font-weight:700; color:#5a45c8; }
+    .ai-sug .rs { font-size:12px; color:#6b665e; margin-top:3px; overflow-wrap:anywhere; }
+    .file-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+    .file-row select { min-height:42px; }
+    .entry .etext-edit { min-height:64px; margin-top:8px; }
+    .entry-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+    .entry-actions button { min-height:42px; }
+    .empty { text-align:center; color:var(--muted); padding:40px 0; }
+    #topHint { font-size:13px; color:var(--muted); margin:2px 2px 12px; }
+"""
+
+_INBOX_BODY = """
+<body>
+  <header class="app-bar">
+    <a class="button secondary" href="/capture">← 速记</a>
+    <h1>📥 收件箱</h1>
+    <button class="icon-btn" onclick="loadAll()" title="刷新" style="min-height:40px;min-width:40px;background:#f1efeb;color:#43413d;box-shadow:none">⟳</button>
+  </header>
+  <main>
+    <div id="topHint">待归档的速记在这里。选好实验和步骤后「写入记录」；AI 归档后这里会显示它的建议供你确认。</div>
+    <div id="entries"></div>
+  </main>
+__NAV__
+<script>
+let experiments = [];
+const stepsCache = {};
+
+function esc(v){ return String(v ?? "").replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
+async function api(path, opts={}){
+  const res = await fetch(path, {headers:{"Content-Type":"application/json", ...(opts.headers||{})}, ...opts});
+  if(!res.ok) throw new Error(await res.text());
+  return res.status === 204 ? null : await res.json();
+}
+
+async function ensureSteps(expId){
+  if(!expId) return [];
+  if(stepsCache[expId]) return stepsCache[expId];
+  try { stepsCache[expId] = await api(`/api/experiments/${expId}/steps`); }
+  catch { stepsCache[expId] = []; }
+  return stepsCache[expId];
+}
+
+async function loadAll(){
+  try { experiments = await api("/api/experiment_summaries"); } catch { experiments = []; }
+  let items = [];
+  try { items = await api("/api/inbox?status=pending"); } catch {}
+  const root = document.getElementById("entries");
+  if(!items.length){ root.innerHTML = '<div class="empty">🎉 收件箱空了，都归档好了。</div>'; return; }
+  root.innerHTML = "";
+  for(const it of items){ root.appendChild(await renderEntry(it)); }
+}
+
+function expOptions(sel){
+  return '<option value="">选择实验…</option>' + experiments.map(e =>
+    `<option value="${e.id}" ${String(sel)===String(e.id)?"selected":""}>${esc(e.name)}</option>`).join("");
+}
+
+async function renderEntry(it){
+  const el = document.createElement("div");
+  el.className = "entry"; el.id = "entry-"+it.id;
+  const t = new Date(it.created_at);
+  const stamp = t.toLocaleString();
+  const media = (it.image_urls||[]).map(u => `<a href="${esc(u)}" target="_blank"><img src="${esc(u)}"></a>`).join("");
+  const audio = it.audio_url ? `<audio controls preload="none" src="${esc(it.audio_url)}"></audio>` : "";
+  const prop = it.proposal;
+  const preExp = (prop && prop.experiment_id) || it.hinted_experiment_id || "";
+  const preStep = (prop && prop.step_id) || "";
+  const preNote = prop && prop.note != null ? prop.note : it.text;
+
+  let sug = "";
+  if(prop){
+    const en = experiments.find(e=>String(e.id)===String(prop.experiment_id));
+    const fieldsTxt = (prop.fields||[]).map(f=>`${esc(f.key)}=${esc(f.value)}`).join("，");
+    sug = `<div class="ai-sug"><span class="lbl">✨ AI 建议</span>：放到 <b>${en?esc(en.name):("实验"+prop.experiment_id)}</b>`
+        + (prop.step_id?` · 步骤#${prop.step_id}`:"")
+        + (fieldsTxt?` · 字段 ${fieldsTxt}`:"")
+        + (prop.reason?`<div class="rs">依据：${esc(prop.reason)}</div>`:"")
+        + `</div>`;
+  }
+
+  el.innerHTML = `
+    <div class="etime">${stamp}${it.hinted_experiment_id?" · 已标实验":""}</div>
+    <div class="etext">${it.text?esc(it.text):'<span class="small">（无文字）</span>'}</div>
+    <div class="emedia">${media}</div>
+    ${audio}
+    ${sug}
+    <textarea class="etext-edit" id="note-${it.id}" placeholder="写入记录的备注（可改）">${esc(preNote||"")}</textarea>
+    <div class="file-row">
+      <select id="exp-${it.id}" onchange="onExpChange(${it.id})">${expOptions(preExp)}</select>
+      <select id="step-${it.id}"><option value="">选择步骤…</option></select>
+    </div>
+    <div class="entry-actions">
+      <button class="green" onclick="applyEntry(${it.id})">写入记录 ✓</button>
+      <button class="secondary" onclick="dismissEntry(${it.id})">忽略</button>
+      <button class="danger-ghost" onclick="deleteEntry(${it.id})">删除</button>
+      <span class="small" id="es-${it.id}"></span>
+    </div>`;
+
+  // populate steps if an experiment is preselected
+  if(preExp){ setTimeout(()=>fillSteps(it.id, preExp, preStep), 0); }
+  return el;
+}
+
+async function onExpChange(id){
+  const expId = document.getElementById("exp-"+id).value;
+  await fillSteps(id, expId, "");
+}
+async function fillSteps(id, expId, preStep){
+  const sel = document.getElementById("step-"+id);
+  if(!sel) return;
+  if(!expId){ sel.innerHTML = '<option value="">选择步骤…</option>'; return; }
+  const steps = await ensureSteps(expId);
+  sel.innerHTML = '<option value="">选择步骤…</option>' + steps.map(s =>
+    `<option value="${s.id}" ${String(preStep)===String(s.id)?"selected":""}>第${s.step_index+1}步 · ${esc(s.title)}${s.completed_at?" ✓":""}</option>`).join("");
+}
+
+async function applyEntry(id){
+  const stepId = document.getElementById("step-"+id).value;
+  const st = document.getElementById("es-"+id);
+  if(!stepId){ st.textContent = "请先选步骤"; return; }
+  const note = document.getElementById("note-"+id).value;
+  const entry = await api("/api/inbox/"+id);
+  const fields = entry.proposal ? entry.proposal.fields : null;
+  st.textContent = "写入中…";
+  try {
+    await api(`/api/inbox/${id}/apply`, {method:"POST", body: JSON.stringify({step_id: Number(stepId), note, fields})});
+    const el = document.getElementById("entry-"+id);
+    if(el){ el.style.opacity=".5"; el.querySelector(".entry-actions").innerHTML = '<span class="small" style="color:var(--green);font-weight:700">✓ 已写入记录</span>'; }
+    setTimeout(loadAll, 900);
+  } catch(e){ st.textContent = "失败："+(e.message||e); }
+}
+async function dismissEntry(id){
+  await api(`/api/inbox/${id}/dismiss`, {method:"POST", body:"{}"});
+  loadAll();
+}
+async function deleteEntry(id){
+  if(!confirm("删除这条速记？")) return;
+  await api(`/api/inbox/${id}`, {method:"DELETE"});
+  loadAll();
+}
+
+loadAll();
+setInterval(loadAll, 12000);
+</script>
+</body>
+</html>
+"""
+
+
+@app.get("/inbox", response_class=HTMLResponse)
+def inbox_page(request: Request):
+    html = (
+        web_ui.page_head("收件箱 · ELN", _INBOX_CSS)
+        + _INBOX_BODY.replace("__NAV__", _bottom_nav("inbox", _flet_home_url(request)))
+    )
+    return _html_response(html, headers={"Cache-Control": "no-store, max-age=0"})
 
 
 # ─────────────────────────────────────────────
@@ -1967,14 +2396,9 @@ setInterval(refreshTimers, 1000);
 function applyBackTarget(){
   const link = document.getElementById("backToFlet");
   if(!link) return;
-  const localHosts = ["127.0.0.1", "localhost", "::1"];
-  const isLan = /^192\\.168\\.|^10\\.|^172\\.(1[6-9]|2\\d|3[0-1])\\./.test(location.hostname);
-  if(location.protocol === "https:" || (!localHosts.includes(location.hostname) && !isLan)){
-    link.href = "/run";
-    link.title = "实验列表";
-  } else {
-    link.href = `${location.protocol}//${location.hostname}:8550/`;
-  }
+  // Web-only: home is the capture page.
+  link.href = "/capture";
+  link.title = "速记";
 }
 renderQueueInfo();
 applyBackTarget();
@@ -2462,6 +2886,188 @@ async def upload_voice_audio(
     if status == "pending":
         voice_worker.notify_new_audio()
     return _voice_note_to_dict(note)
+
+
+# ─────────────────────────────────────────────
+# Inbox (速记捕捉收件箱)
+# ─────────────────────────────────────────────
+
+class InboxCreate(BaseModel):
+    text: str = ""
+    hinted_experiment_id: Optional[int] = None
+
+
+class InboxUpdate(BaseModel):
+    text: Optional[str] = None
+    hinted_experiment_id: Optional[int] = None
+
+
+class InboxProposal(BaseModel):
+    experiment_id: Optional[int] = None
+    step_id: Optional[int] = None
+    note: str = ""
+    fields: Optional[list[dict]] = None
+    reason: str = ""
+
+
+class InboxApply(BaseModel):
+    # confirmed target; falls back to the stored proposal when omitted
+    experiment_id: Optional[int] = None
+    step_id: Optional[int] = None
+    note: Optional[str] = None
+    fields: Optional[list[dict]] = None
+    attach_images: bool = True
+
+
+def _inbox_to_dict(entry: dict) -> dict:
+    d = dict(entry)
+    d["image_urls"] = ["/photos/" + str(p).replace("\\", "/") for p in d.get("image_paths", [])]
+    if d.get("audio_path"):
+        d["audio_url"] = "/photos/" + str(d["audio_path"]).replace("\\", "/")
+    return d
+
+
+@app.get("/api/inbox")
+def list_inbox(status: Optional[str] = Query("pending")):
+    status = None if status in ("all", "") else status
+    return [_inbox_to_dict(e) for e in db_ops.list_inbox_entries(status)]
+
+
+@app.get("/api/inbox/{entry_id}")
+def get_inbox(entry_id: int):
+    e = db_ops.get_inbox_entry(entry_id)
+    if not e:
+        raise HTTPException(404, "Inbox entry not found")
+    return _inbox_to_dict(e)
+
+
+@app.post("/api/inbox", status_code=201)
+def create_inbox(body: InboxCreate):
+    hint = body.hinted_experiment_id
+    if hint and not db_ops.get_experiment(hint):
+        hint = None
+    entry = db_ops.create_inbox_entry(text=body.text.strip(), hinted_experiment_id=hint)
+    return _inbox_to_dict(entry)
+
+
+@app.patch("/api/inbox/{entry_id}")
+def patch_inbox(entry_id: int, body: InboxUpdate):
+    if not db_ops.get_inbox_entry(entry_id):
+        raise HTTPException(404, "Inbox entry not found")
+    updates = body.model_dump(exclude_unset=True)
+    return _inbox_to_dict(db_ops.update_inbox_entry(entry_id, **updates))
+
+
+@app.post("/api/inbox/{entry_id}/media", status_code=201)
+async def upload_inbox_media(
+    entry_id: int,
+    file: UploadFile = File(...),
+    kind: str = Form("image"),
+):
+    entry = db_ops.get_inbox_entry(entry_id)
+    if not entry:
+        raise HTTPException(404, "Inbox entry not found")
+    sub_dir = os.path.join(db_ops.get_inbox_dir(), str(entry_id))
+    os.makedirs(sub_dir, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    default_ext = ".m4a" if kind == "audio" else ".jpg"
+    ext = os.path.splitext(file.filename or ("a" + default_ext))[1] or default_ext
+    filename = f"{kind}_{ts}{ext}"
+    filepath = os.path.join(sub_dir, filename)
+    with open(filepath, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    if os.path.getsize(filepath) <= 0:
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        raise HTTPException(400, "文件为空")
+    rel_path = f"inbox/{entry_id}/{filename}"
+    if kind == "audio":
+        updated = db_ops.set_inbox_audio(entry_id, rel_path)
+    else:
+        updated = db_ops.add_inbox_image(entry_id, rel_path)
+    return _inbox_to_dict(updated)
+
+
+@app.post("/api/inbox/{entry_id}/proposal")
+def set_inbox_proposal(entry_id: int, body: InboxProposal):
+    if not db_ops.get_inbox_entry(entry_id):
+        raise HTTPException(404, "Inbox entry not found")
+    proposal = body.model_dump()
+    updated = db_ops.update_inbox_entry(entry_id, proposal=proposal)
+    return _inbox_to_dict(updated)
+
+
+@app.post("/api/inbox/{entry_id}/apply")
+def apply_inbox(entry_id: int, body: InboxApply):
+    entry = db_ops.get_inbox_entry(entry_id)
+    if not entry:
+        raise HTTPException(404, "Inbox entry not found")
+    proposal = entry.get("proposal") or {}
+    exp_id = body.experiment_id or proposal.get("experiment_id")
+    step_id = body.step_id or proposal.get("step_id")
+    note = body.note if body.note is not None else proposal.get("note", "")
+    fields = body.fields if body.fields is not None else proposal.get("fields")
+
+    step = db_ops.get_step(step_id) if step_id else None
+    if not step:
+        raise HTTPException(400, "请先指定要写入的步骤")
+    if exp_id and step.experiment_id != exp_id:
+        raise HTTPException(400, "步骤不属于所选实验")
+    exp_id = step.experiment_id
+
+    values = dict(step.get_values())
+    # merge field values
+    valid_keys = {f.key for f in step.get_fields()}
+    for f in (fields or []):
+        key = str(f.get("key") or "").strip()
+        if key and key in valid_keys and f.get("value") is not None:
+            values[key] = str(f.get("value"))
+    # append note
+    note = str(note or "").strip()
+    if note:
+        prev = str(values.get(STEP_NOTES_KEY, "") or "").strip()
+        values[STEP_NOTES_KEY] = f"{prev}\n{note}" if prev and note not in prev else (prev or note)
+    db_ops.update_step(step_id, values_json=json.dumps(values, ensure_ascii=False))
+
+    # attach captured images to the step
+    if body.attach_images:
+        for i, rel in enumerate(entry.get("image_paths", []), 1):
+            db_ops.add_photo_to_step(step_id, rel, f"速记图 {i}")
+
+    db_ops.update_inbox_entry(
+        entry_id, status="filed",
+        filed_experiment_id=exp_id, filed_step_id=step_id, filed_at=db_ops._now(),
+    )
+    return {"ok": True, "experiment_id": exp_id, "step_id": step_id}
+
+
+@app.post("/api/inbox/{entry_id}/dismiss")
+def dismiss_inbox(entry_id: int):
+    if not db_ops.get_inbox_entry(entry_id):
+        raise HTTPException(404, "Inbox entry not found")
+    db_ops.update_inbox_entry(entry_id, status="dismissed")
+    return {"ok": True}
+
+
+@app.delete("/api/inbox/{entry_id}", status_code=204)
+def delete_inbox(entry_id: int):
+    if not db_ops.delete_inbox_entry(entry_id):
+        raise HTTPException(404, "Inbox entry not found")
+
+
+@app.get("/api/experiment_summaries")
+def experiment_summaries(status: Optional[str] = Query("active,needs_wrapup")):
+    rows = db_ops.list_experiment_summaries(status=status)
+    return [
+        {
+            "id": r["id"], "name": r["name"], "status": r["status"],
+            "total_steps": r.get("total_steps", 0),
+            "completed_steps": r.get("completed_steps", 0),
+        }
+        for r in rows
+    ]
 
 
 class AiOrganizeRequest(BaseModel):

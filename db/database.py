@@ -216,6 +216,21 @@ CREATE TABLE IF NOT EXISTS voice_notes (
     created_at      TEXT    NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS inbox_entries (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at            TEXT    NOT NULL,
+    text                  TEXT    NOT NULL DEFAULT '',
+    audio_path            TEXT    DEFAULT '',
+    image_paths           TEXT    NOT NULL DEFAULT '[]',
+    status                TEXT    NOT NULL DEFAULT 'pending',
+    hinted_experiment_id  INTEGER,
+    proposal_json         TEXT,
+    filed_experiment_id   INTEGER,
+    filed_step_id         INTEGER,
+    filed_at              TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_inbox_status ON inbox_entries(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_voice_notes_experiment ON voice_notes(experiment_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_steps_experiment ON steps(experiment_id, step_index);
 CREATE INDEX IF NOT EXISTS idx_timers_experiment ON timers(experiment_id);
@@ -784,6 +799,106 @@ def update_voice_note(note_id: int, **kwargs) -> Optional[dict[str, Any]]:
 def delete_voice_note(note_id: int) -> bool:
     with db_conn() as conn:
         cur = conn.execute("DELETE FROM voice_notes WHERE id = ?", (note_id,))
+        return cur.rowcount > 0
+
+
+# ─────────────────────────────────────────────
+# Inbox (速记捕捉收件箱) CRUD
+# ─────────────────────────────────────────────
+# status: 'pending' 待归档 / 'filed' 已写入某实验 / 'dismissed' 已忽略
+
+def get_inbox_dir() -> str:
+    base = os.path.join(get_photos_dir(), "inbox")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def _inbox_row_to_dict(row) -> dict[str, Any]:
+    d = dict(row)
+    try:
+        d["image_paths"] = json.loads(d.get("image_paths") or "[]")
+    except (TypeError, ValueError):
+        d["image_paths"] = []
+    if d.get("proposal_json"):
+        try:
+            d["proposal"] = json.loads(d["proposal_json"])
+        except (TypeError, ValueError):
+            d["proposal"] = None
+    else:
+        d["proposal"] = None
+    d.pop("proposal_json", None)
+    return d
+
+
+def create_inbox_entry(text: str = "", hinted_experiment_id: Optional[int] = None) -> dict[str, Any]:
+    with db_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO inbox_entries (created_at, text, hinted_experiment_id, status)
+               VALUES (?, ?, ?, 'pending')""",
+            (_now(), text or "", hinted_experiment_id),
+        )
+        eid = cur.lastrowid
+    return get_inbox_entry(eid)
+
+
+def get_inbox_entry(entry_id: int) -> Optional[dict[str, Any]]:
+    with db_conn() as conn:
+        row = conn.execute("SELECT * FROM inbox_entries WHERE id = ?", (entry_id,)).fetchone()
+    return _inbox_row_to_dict(row) if row else None
+
+
+def list_inbox_entries(status: Optional[str] = None) -> list[dict[str, Any]]:
+    with db_conn() as conn:
+        if status:
+            rows = conn.execute(
+                "SELECT * FROM inbox_entries WHERE status = ? ORDER BY created_at DESC, id DESC",
+                (status,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM inbox_entries ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+    return [_inbox_row_to_dict(r) for r in rows]
+
+
+def add_inbox_image(entry_id: int, rel_path: str) -> Optional[dict[str, Any]]:
+    entry = get_inbox_entry(entry_id)
+    if not entry:
+        return None
+    imgs = entry["image_paths"]
+    imgs.append(rel_path)
+    with db_conn() as conn:
+        conn.execute(
+            "UPDATE inbox_entries SET image_paths = ? WHERE id = ?",
+            (json.dumps(imgs, ensure_ascii=False), entry_id),
+        )
+    return get_inbox_entry(entry_id)
+
+
+def set_inbox_audio(entry_id: int, rel_path: str) -> Optional[dict[str, Any]]:
+    with db_conn() as conn:
+        conn.execute("UPDATE inbox_entries SET audio_path = ? WHERE id = ?", (rel_path, entry_id))
+    return get_inbox_entry(entry_id)
+
+
+def update_inbox_entry(entry_id: int, **kwargs) -> Optional[dict[str, Any]]:
+    allowed = {"text", "status", "hinted_experiment_id",
+               "filed_experiment_id", "filed_step_id", "filed_at"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if "proposal" in kwargs:
+        prop = kwargs["proposal"]
+        updates["proposal_json"] = json.dumps(prop, ensure_ascii=False) if prop is not None else None
+    if updates:
+        sets = ", ".join(f"{k} = ?" for k in updates)
+        with db_conn() as conn:
+            conn.execute(f"UPDATE inbox_entries SET {sets} WHERE id = ?",
+                         (*updates.values(), entry_id))
+    return get_inbox_entry(entry_id)
+
+
+def delete_inbox_entry(entry_id: int) -> bool:
+    with db_conn() as conn:
+        cur = conn.execute("DELETE FROM inbox_entries WHERE id = ?", (entry_id,))
         return cur.rowcount > 0
 
 
