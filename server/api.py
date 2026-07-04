@@ -343,7 +343,7 @@ def _bottom_nav(active: str, home_url: str) -> str:
         ("capture", "note", "速记", "/capture"),
         ("inbox", "inbox", "收件箱", "/inbox"),
         ("run", "flask", "实验", "/run"),
-        ("more", "more", "更多", home_url),
+        ("more", "more", "更多", "/more"),
     ]
     cells = "".join(
         f'<a class="nav-cell{" active" if key == active else ""}" href="{href}">'
@@ -764,6 +764,303 @@ def inbox_page(request: Request):
     })
     body = body.replace("__NAV__", _bottom_nav("inbox", _flet_home_url(request)))
     return _html_response(web_ui.page_head("收件箱 · ELN", _INBOX_CSS) + body,
+                          headers={"Cache-Control": "no-store, max-age=0"})
+
+
+# ─────────────────────────────────────────────
+# More hub + protocols / history / settings (native pages)
+# ─────────────────────────────────────────────
+
+_HUB_CSS = _NAV_CSS + """
+    .hub-list { display:grid; gap:12px; }
+    .hub-card { display:flex; align-items:center; gap:14px; background:var(--card); border:1px solid var(--line);
+      border-radius:var(--r-lg); padding:16px; text-decoration:none; color:var(--ink); }
+    .hub-card .hi { width:40px; height:40px; border-radius:10px; background:var(--inset); color:var(--clay-ink);
+      display:flex; align-items:center; justify-content:center; flex:0 0 auto; }
+    .hub-card .ht { flex:1; min-width:0; }
+    .hub-card .ht b { font-weight:600; font-size:15px; }
+    .hub-card .ht span { display:block; color:var(--muted); font-size:12.5px; margin-top:2px; }
+    .hub-card .ha { color:var(--faint); }
+    .about { margin-top:22px; text-align:center; color:var(--faint); font-size:12px; line-height:1.7; }
+"""
+
+
+@app.get("/more", response_class=HTMLResponse)
+def more_page(request: Request):
+    cards = [
+        ("protocols", "flask", "协议库", "新建实验、导入或编辑协议", "/protocols"),
+        ("history", "note", "历史记录", "查看以往实验和报告", "/history"),
+        ("settings", "settings", "设置", "AI 归档、访问信息", "/settings"),
+    ]
+    rows = "".join(
+        f'<a class="hub-card" href="{href}"><span class="hi">{web_ui.icon(ic, 21)}</span>'
+        f'<span class="ht"><b>{title}</b><span>{sub}</span></span>'
+        f'<span class="ha">{web_ui.icon("chevron-right", 18)}</span></a>'
+        for _k, ic, title, sub, href in cards
+    )
+    body = f"""
+<body>
+  <header class="app-bar"><h1>更多</h1></header>
+  <main>
+    <div class="hub-list">{rows}</div>
+    <div class="about">ELN 实验记录 · 数据存储于本机 ELN_Data<br/>速记 → 收件箱 → AI 归档 → 实验记录</div>
+  </main>
+{_bottom_nav("more", "/")}
+</body>
+</html>"""
+    return _html_response(web_ui.page_head("更多 · ELN", _HUB_CSS) + body,
+                          headers={"Cache-Control": "no-store, max-age=0"})
+
+
+_LIST_CSS = _NAV_CSS + """
+    main { max-width:760px; }
+    .row-card { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg);
+      padding:14px; margin-bottom:12px; }
+    .row-card .rt { font-weight:600; font-size:15px; overflow-wrap:anywhere; }
+    .row-card .rm { color:var(--muted); font-size:12.5px; margin-top:3px; }
+    .row-card .ra { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+    .row-card .ra button, .row-card .ra a.button { min-height:38px; padding:7px 13px; font-size:14px; }
+    .badge { display:inline-block; font-size:11.5px; font-weight:500; padding:2px 9px; border-radius:999px;
+      background:var(--inset); color:var(--muted); border:1px solid var(--line); }
+    .badge.active { background:var(--clay-soft); color:var(--clay-ink); border-color:var(--clay-line); }
+    .badge.done { background:var(--pos-soft); color:#2c5c40; border-color:#cfe2d5; }
+    .empty { text-align:center; color:var(--muted); padding:44px 0; }
+    .top-actions { display:flex; justify-content:flex-end; margin-bottom:12px; }
+    .modal-backdrop { position:fixed; inset:0; z-index:70; display:none; align-items:center; justify-content:center;
+      background:rgba(20,18,15,.4); padding:18px; }
+    .modal-backdrop.open { display:flex; }
+    .modal { width:min(680px,100%); max-height:86vh; overflow:auto; background:#fff; border-radius:16px; padding:18px; }
+    .modal h2 { margin:0 0 12px; }
+    .modal textarea { min-height:200px; font-family:ui-monospace,Consolas,monospace; font-size:13px; }
+"""
+
+_MODAL_HTML = """
+  <div id="modalBackdrop" class="modal-backdrop">
+    <div class="modal">
+      <h2 id="modalTitle">编辑</h2>
+      <div id="modalBody"></div>
+      <div class="actions">
+        <button class="green" id="modalSave">保存</button>
+        <button class="secondary" onclick="closeModal()">取消</button>
+      </div>
+      <div class="small" id="modalStatus" style="margin-top:8px"></div>
+    </div>
+  </div>
+"""
+
+_MODAL_JS = """
+let modalSave = null;
+function openModal(title, html, onSave){
+  document.getElementById("modalTitle").textContent = title;
+  document.getElementById("modalBody").innerHTML = html;
+  document.getElementById("modalStatus").textContent = "";
+  modalSave = onSave;
+  document.getElementById("modalBackdrop").classList.add("open");
+}
+function closeModal(){ document.getElementById("modalBackdrop").classList.remove("open"); modalSave = null; }
+document.getElementById("modalSave").addEventListener("click", async () => {
+  if(!modalSave) return;
+  try { await modalSave(); }
+  catch(e){ document.getElementById("modalStatus").textContent = "失败：" + (e.message || e); }
+});
+function esc(v){ return String(v ?? "").replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
+async function api(path, opts={}){
+  const res = await fetch(path, {headers:{"Content-Type":"application/json", ...(opts.headers||{})}, ...opts});
+  if(!res.ok) throw new Error(await res.text());
+  return res.status === 204 ? null : await res.json();
+}
+"""
+
+
+@app.get("/protocols", response_class=HTMLResponse)
+def protocols_page(request: Request):
+    body = f"""
+<body>
+  <header class="app-bar">
+    <a class="button secondary" href="/more">{web_ui.icon('chevron-left',18)} 更多</a>
+    <h1>协议库</h1>
+  </header>
+  <main>
+    <div class="top-actions"><button onclick="importProto()">{web_ui.icon('plus',17)} 导入协议</button></div>
+    <div id="list"><div class="small">加载中…</div></div>
+  </main>
+{_MODAL_HTML}
+{_bottom_nav("more", "/")}
+<script>
+{web_ui.ICON_JS}
+{_MODAL_JS}
+async function load(){{
+  let ps = [];
+  try {{ ps = await api("/api/protocols"); }} catch {{}}
+  const box = document.getElementById("list");
+  if(!ps.length){{ box.innerHTML = '<div class="empty">还没有协议。点右上角导入一个。</div>'; return; }}
+  box.innerHTML = ps.map(p => `
+    <div class="row-card">
+      <div class="rt">${{esc(p.name)}}</div>
+      <div class="rm">v${{esc(p.version||"1.0")}}${{p.author?" · "+esc(p.author):""}} · 已用 ${{p.use_count||0}} 次</div>
+      <div class="ra">
+        <button class="green" onclick='startExp(${{p.id}}, ${{JSON.stringify(p.name)}})'>{web_ui.icon('plus',16)} 新建实验</button>
+        <button class="secondary" onclick='editProto(${{p.id}})'>编辑</button>
+        <button class="danger-ghost" onclick='delProto(${{p.id}}, ${{JSON.stringify(p.name)}})'>删除</button>
+      </div>
+    </div>`).join("");
+}}
+async function startExp(pid, name){{
+  const p = await api("/api/protocols/"+pid);
+  openModal("新建实验", `<div class="field"><label>实验名称</label><input id="expName" value="${{esc(name)}} ${{new Date().toLocaleDateString()}}" /></div>`, async () => {{
+    const nm = document.getElementById("expName").value.trim();
+    if(!nm) throw new Error("请输入实验名称");
+    const exp = await api("/api/experiments", {{method:"POST", body: JSON.stringify({{name:nm, protocol_json:p.protocol_json, protocol_id:pid}})}});
+    location.href = "/run?experiment_id=" + exp.id;
+  }});
+}}
+async function editProto(pid){{
+  const p = await api("/api/protocols/"+pid);
+  let pretty = p.protocol_json;
+  try {{ pretty = JSON.stringify(JSON.parse(p.protocol_json), null, 2); }} catch {{}}
+  openModal("编辑协议", `<div class="field"><textarea id="protoJson">${{esc(pretty)}}</textarea></div>`, async () => {{
+    const j = document.getElementById("protoJson").value;
+    JSON.parse(j);
+    await api("/api/protocols/"+pid, {{method:"PUT", body: JSON.stringify({{protocol_json:j}})}});
+    closeModal(); load();
+  }});
+}}
+function importProto(){{
+  openModal("导入协议", `<p class="small">粘贴协议 JSON（protocol_name + steps）。</p><div class="field"><textarea id="protoJson" placeholder='{{"protocol_name":"…","steps":[…]}}'></textarea></div>`, async () => {{
+    const j = document.getElementById("protoJson").value;
+    JSON.parse(j);
+    await api("/api/protocols", {{method:"POST", body: JSON.stringify({{protocol_json:j}})}});
+    closeModal(); load();
+  }});
+}}
+async function delProto(pid, name){{
+  if(!confirm("删除协议「"+name+"」？")) return;
+  await api("/api/protocols/"+pid, {{method:"DELETE"}});
+  load();
+}}
+load();
+</script>
+</body>
+</html>"""
+    return _html_response(web_ui.page_head("协议库 · ELN", _LIST_CSS) + body,
+                          headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@app.get("/history", response_class=HTMLResponse)
+def history_page(request: Request):
+    body = f"""
+<body>
+  <header class="app-bar">
+    <a class="button secondary" href="/more">{web_ui.icon('chevron-left',18)} 更多</a>
+    <h1>历史记录</h1>
+    <button class="icon-btn" onclick="load()" title="刷新" aria-label="刷新">{web_ui.icon('refresh',18)}</button>
+  </header>
+  <main><div id="list"><div class="small">加载中…</div></div></main>
+{_bottom_nav("more", "/")}
+<script>
+{web_ui.ICON_JS}
+function esc(v){{ return String(v ?? "").replace(/[&<>"']/g, s => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[s])); }}
+async function api(p){{ const r = await fetch(p); if(!r.ok) throw new Error(await r.text()); return r.json(); }}
+const LABEL = {{active:"进行中", needs_wrapup:"待收尾", completed:"已完成", archived:"已归档", abandoned:"已放弃"}};
+async function load(){{
+  let xs = [];
+  try {{ xs = await api("/api/experiment_summaries?status=active,needs_wrapup,completed,archived,abandoned"); }} catch {{}}
+  const box = document.getElementById("list");
+  if(!xs.length){{ box.innerHTML = '<div class="empty">还没有实验记录。</div>'; return; }}
+  box.innerHTML = xs.map(x => {{
+    const active = (x.status==="active"||x.status==="needs_wrapup");
+    const cls = x.status==="completed" ? "done" : (active ? "active" : "");
+    const date = x.created_at ? new Date(x.created_at).toLocaleDateString() : "";
+    return `<div class="row-card">
+      <div class="rt">${{esc(x.name)}} <span class="badge ${{cls}}">${{LABEL[x.status]||x.status}}</span></div>
+      <div class="rm">${{date}} · 步骤 ${{x.completed_steps}}/${{x.total_steps}}</div>
+      <div class="ra">
+        ${{active ? `<a class="button green" href="/run?experiment_id=${{x.id}}">继续</a>` : ""}}
+        <a class="button secondary" href="/run/report/${{x.id}}?return_to=history">查看报告</a>
+      </div>
+    </div>`;
+  }}).join("");
+}}
+load();
+</script>
+</body>
+</html>"""
+    return _html_response(web_ui.page_head("历史记录 · ELN", _LIST_CSS) + body,
+                          headers={"Cache-Control": "no-store, max-age=0"})
+
+
+_SETTINGS_CSS = _NAV_CSS + """
+    main { max-width:560px; }
+    .field { margin-bottom:14px; }
+    .field label { display:block; margin-bottom:6px; }
+    .save-row { margin-top:6px; }
+    #saveHint { margin-left:10px; font-size:13px; }
+    .about { margin-top:22px; color:var(--faint); font-size:12px; line-height:1.7; }
+"""
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request):
+    lan = ""
+    try:
+        from server.startup import get_local_ip, get_api_port
+        lan = f"http://{get_local_ip()}:{get_api_port()}"
+    except Exception:
+        pass
+    body = f"""
+<body>
+  <header class="app-bar">
+    <a class="button secondary" href="/more">{web_ui.icon('chevron-left',18)} 更多</a>
+    <h1>设置</h1>
+  </header>
+  <main>
+    <section>
+      <h2>AI 归档语音速记</h2>
+      <p class="small" style="margin:0 0 14px">配置后，AI 能把收件箱里的口语整理成规范记录（先给建议，你在收件箱确认后才写入）。</p>
+      <div class="field"><label>模型服务</label>
+        <select id="provider"><option value="claude">Claude (Anthropic)</option><option value="openai">OpenAI / 兼容接口</option></select></div>
+      <div class="field"><label>API 密钥</label>
+        <input id="apiKey" type="password" placeholder="留空表示不修改已保存的密钥" autocomplete="off" /></div>
+      <div class="field"><label>模型</label>
+        <input id="model" placeholder="claude-opus-4-8 / gpt-4o-mini" /></div>
+      <div class="field"><label>自定义地址（可选）</label>
+        <input id="baseUrl" placeholder="兼容接口填 base_url，官方留空" /></div>
+      <div class="save-row"><button class="green" onclick="saveAi()">保存</button><span class="small" id="saveHint"></span></div>
+    </section>
+    <div class="about">局域网地址：{lan or "启动后可见"}<br/>数据存储于本机 ELN_Data，升级代码不影响数据。</div>
+  </main>
+{_bottom_nav("more", "/")}
+<script>
+async function api(p, opts={{}}){{ const r = await fetch(p, {{headers:{{"Content-Type":"application/json", ...(opts.headers||{{}})}}, ...opts}}); if(!r.ok) throw new Error(await r.text()); return r.status===204?null:r.json(); }}
+async function load(){{
+  try {{
+    const s = await api("/api/settings/ai");
+    document.getElementById("provider").value = s.provider || "claude";
+    document.getElementById("model").value = s.model || "";
+    document.getElementById("baseUrl").value = s.base_url || "";
+    if(s.has_key) document.getElementById("apiKey").placeholder = "已设置（留空表示不修改）";
+  }} catch {{}}
+}}
+async function saveAi(){{
+  const hint = document.getElementById("saveHint");
+  hint.textContent = "保存中…"; hint.style.color = "var(--muted)";
+  try {{
+    await api("/api/settings/ai", {{method:"POST", body: JSON.stringify({{
+      provider: document.getElementById("provider").value,
+      api_key: document.getElementById("apiKey").value,
+      model: document.getElementById("model").value,
+      base_url: document.getElementById("baseUrl").value,
+    }})}});
+    document.getElementById("apiKey").value = "";
+    hint.textContent = "已保存"; hint.style.color = "var(--pos)";
+    load();
+  }} catch(e){{ hint.textContent = "失败：" + (e.message||e); hint.style.color = "var(--neg)"; }}
+}}
+load();
+</script>
+</body>
+</html>"""
+    return _html_response(web_ui.page_head("设置 · ELN", _SETTINGS_CSS) + body,
                           headers={"Cache-Control": "no-store, max-age=0"})
 
 
@@ -3093,6 +3390,8 @@ def experiment_summaries(status: Optional[str] = Query("active,needs_wrapup")):
             "id": r["id"], "name": r["name"], "status": r["status"],
             "total_steps": r.get("total_steps", 0),
             "completed_steps": r.get("completed_steps", 0),
+            "created_at": r.get("created_at"),
+            "completed_at": r.get("completed_at"),
         }
         for r in rows
     ]
@@ -3100,6 +3399,13 @@ def experiment_summaries(status: Optional[str] = Query("active,needs_wrapup")):
 
 class AiOrganizeRequest(BaseModel):
     note_texts: Optional[list[str]] = None
+
+
+class AiSettings(BaseModel):
+    provider: Optional[str] = None
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
 
 
 @app.get("/api/ai/status")
@@ -3111,6 +3417,28 @@ def ai_status():
         "provider": cfg.get("provider"),
         "model": cfg.get("model"),
     }
+
+
+@app.get("/api/settings/ai")
+def get_settings_ai():
+    from utils.app_settings import get_ai_config
+    cfg = get_ai_config()
+    return {
+        "provider": cfg.get("provider"),
+        "base_url": cfg.get("base_url", ""),
+        "model": cfg.get("model", ""),
+        "has_key": bool(cfg.get("api_key")),
+    }
+
+
+@app.post("/api/settings/ai")
+def post_settings_ai(body: AiSettings):
+    from utils.app_settings import set_ai_config
+    # api_key: only overwrite when a non-empty value is provided
+    key = body.api_key if (body.api_key and body.api_key.strip()) else None
+    set_ai_config(provider=body.provider, api_key=key,
+                  base_url=body.base_url, model=body.model)
+    return get_settings_ai()
 
 
 @app.post("/api/experiments/{exp_id}/ai_organize")
