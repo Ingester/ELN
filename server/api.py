@@ -152,6 +152,17 @@ def _login_page(next_path: str, error: str = "") -> HTMLResponse:
 """)
 
 
+def _is_local_direct(request: Request) -> bool:
+    """True for a genuine loopback request (local tools), False for tunnel
+    traffic. Cloudflared connects from 127.0.0.1 too, but always adds forwarding
+    headers — so a loopback client with no such header is a real local call."""
+    client = (request.client.host if request.client else "") or ""
+    if client not in ("127.0.0.1", "::1", "localhost"):
+        return False
+    fwd_headers = ("cf-connecting-ip", "x-forwarded-for", "x-forwarded-proto", "cf-ray")
+    return not any(h in request.headers for h in fwd_headers)
+
+
 @app.middleware("http")
 async def optional_password_auth(request: Request, call_next):
     if not _auth_password():
@@ -161,6 +172,10 @@ async def optional_password_auth(request: Request, call_next):
         request.method == "OPTIONS"
         or path in {"/login", "/logout", "/api/health", "/favicon.ico"}
     ):
+        return await call_next(request)
+    # Local tools (Claude Code / Codex / curl on this machine) skip the password;
+    # the password guards the public tunnel only.
+    if _is_local_direct(request):
         return await call_next(request)
     if _valid_auth_token(request.cookies.get(_auth_cookie_name(), "")):
         return await call_next(request)
@@ -615,6 +630,14 @@ _INBOX_CSS = _NAV_CSS + """
     .entry-actions button { min-height:42px; }
     .empty { text-align:center; color:var(--muted); padding:40px 0; }
     #topHint { font-size:13px; color:var(--muted); margin:2px 2px 12px; }
+    .ai-bar { display:flex; align-items:center; gap:10px; background:var(--clay-soft); border:1px solid var(--clay-line);
+      border-radius:var(--r-lg); padding:12px 14px; margin-bottom:14px; }
+    .ai-bar .t { flex:1; min-width:0; font-size:13px; color:var(--clay-ink); line-height:1.5; }
+    .ai-panel { display:none; background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg);
+      padding:14px; margin-bottom:14px; }
+    .ai-panel.open { display:block; }
+    .ai-panel pre { background:var(--inset); border:1px solid var(--line); border-radius:10px; padding:12px;
+      font-size:12.5px; line-height:1.55; white-space:pre-wrap; word-break:break-word; max-height:280px; overflow:auto; }
 """
 
 _INBOX_BODY = """
@@ -625,12 +648,44 @@ _INBOX_BODY = """
     <button class="icon-btn" onclick="loadAll()" title="刷新" aria-label="刷新">__I_REFRESH__</button>
   </header>
   <main>
+    <div class="ai-bar">
+      <span class="t">让 AI 读收件箱、给出「放哪个实验哪一步」的建议，你再确认。用你正开着的 Claude Code / Codex（走订阅，不花 token）。</span>
+      <button onclick="toggleAiPanel()">__I_SPARK__ 让 AI 归档</button>
+    </div>
+    <div class="ai-panel" id="aiPanel">
+      <div class="small" style="margin-bottom:8px">把下面这段话复制，粘贴进你的 Claude Code / Codex 对话里发送即可。它会读收件箱、看图片、提交建议（不直接写入），完成后刷新这一页逐条确认。</div>
+      <pre id="aiPrompt"></pre>
+      <div class="actions" style="margin-top:10px">
+        <button class="green" onclick="copyPrompt()">复制指令</button>
+        <button class="secondary" onclick="toggleAiPanel()">收起</button>
+        <span class="small" id="copyHint"></span>
+      </div>
+    </div>
     <div id="topHint">待归档的速记在这里。选好实验和步骤后「写入记录」；AI 归档后这里会显示它的建议供你确认。</div>
     <div id="entries"></div>
   </main>
 __NAV__
 <script>
 __ICON_JS__
+const AI_PROMPT = `帮我归档 ELN 速记收件箱。ELN 本地接口在 http://127.0.0.1:8600 （本机免密）。
+
+1. GET /api/inbox?status=pending 取待归档条目（含 id、text、image_urls、hinted_experiment_id）。
+2. GET /api/experiment_summaries?status=active,needs_wrapup 看有哪些实验；对相关实验 GET /api/experiments/{id}/steps 看步骤（id、step_index、title、description、fields 的 key/label/type/options）。
+3. 每条待归档：有图片就读 image_urls（形如 http://127.0.0.1:8600/photos/...）看内容；判断属于哪个实验哪一步（hinted_experiment_id 有值优先）；写一段规范中文备注（忠实原意别编造）；只有明确提到数值才填字段（匹配该步骤 field 的 key）。
+4. 提交建议（不要写入记录）：POST /api/inbox/{id}/proposal，body 示例：
+{"experiment_id":3,"step_id":12,"note":"加样时观察到轻微浑浊","fields":[{"key":"vol","value":"12","reason":"用户说加了12微升"}],"reason":"提到加样和浑浊，对应第1步"}
+5. 全部提交后告诉我数量。不要调用 /apply —— 我会在浏览器 /inbox 里逐条确认。`;
+function toggleAiPanel(){
+  const p = document.getElementById("aiPanel");
+  const open = !p.classList.contains("open");
+  p.classList.toggle("open", open);
+  if(open) document.getElementById("aiPrompt").textContent = AI_PROMPT;
+}
+async function copyPrompt(){
+  const h = document.getElementById("copyHint");
+  try { await navigator.clipboard.writeText(AI_PROMPT); h.textContent = "已复制，去粘贴给 AI"; h.style.color = "var(--pos)"; }
+  catch { const r = document.createRange(); r.selectNode(document.getElementById("aiPrompt")); getSelection().removeAllRanges(); getSelection().addRange(r); h.textContent = "已选中，按 Ctrl+C 复制"; }
+}
 let experiments = [];
 const stepsCache = {};
 
@@ -761,6 +816,7 @@ def inbox_page(request: Request):
     body = _INBOX_BODY.replace("__ICON_JS__", web_ui.ICON_JS)
     body = _fill_icons(body, {
         "__I_BACK__": ("chevron-left", 18), "__I_REFRESH__": ("refresh", 18),
+        "__I_SPARK__": ("sparkle", 16),
     })
     body = body.replace("__NAV__", _bottom_nav("inbox", _flet_home_url(request)))
     return _html_response(web_ui.page_head("收件箱 · ELN", _INBOX_CSS) + body,
