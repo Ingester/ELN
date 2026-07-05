@@ -428,8 +428,12 @@ Common mistakes
     )
 
     # ── AI 整理语音速记 ───────────────────────────
-    from utils.app_settings import get_ai_config, set_ai_config
+    from utils.app_settings import (
+        get_ai_config, get_transcription_config,
+        set_ai_config, set_transcription_config,
+    )
     _ai = get_ai_config()
+    _tx = get_transcription_config()
 
     ai_provider = ft.Dropdown(
         value=_ai["provider"],
@@ -478,6 +482,89 @@ Common mistakes
                                   bgcolor=ft.Colors.ORANGE_600, color=ft.Colors.WHITE, height=32),
             ]),
             ai_status,
+        ], spacing=8),
+        border=ft.Border.all(1, ft.Colors.GREY_200),
+        border_radius=8,
+        padding=12,
+    )
+
+    tx_provider = ft.Dropdown(
+        value=_tx["provider"],
+        label=_("转写服务"),
+        options=[
+            ft.dropdown.Option("local", _("本地 faster-whisper")),
+            ft.dropdown.Option("tencent", _("腾讯云 ASR")),
+            ft.dropdown.Option("openai", _("OpenAI Speech-to-Text")),
+        ],
+        width=260, dense=True,
+    )
+    tx_secret_id = ft.TextField(
+        value="", label=_("腾讯云 SecretId"), password=True, can_reveal_password=True,
+        hint_text=_("留空表示不修改已保存的 SecretId"),
+        border_color=ft.Colors.ORANGE_300, focused_border_color=ft.Colors.ORANGE_600,
+    )
+    tx_secret_key = ft.TextField(
+        value="", label=_("腾讯云 SecretKey"), password=True, can_reveal_password=True,
+        hint_text=_("留空表示不修改已保存的 SecretKey"),
+        border_color=ft.Colors.ORANGE_300, focused_border_color=ft.Colors.ORANGE_600,
+    )
+    tx_region = ft.TextField(
+        value=_tx["tencent_region"], label=_("腾讯云地域"),
+        hint_text="ap-shanghai",
+        border_color=ft.Colors.ORANGE_300, focused_border_color=ft.Colors.ORANGE_600,
+    )
+    tx_engine = ft.TextField(
+        value=_tx["tencent_engine"], label=_("腾讯云识别引擎"),
+        hint_text="16k_zh",
+        border_color=ft.Colors.ORANGE_300, focused_border_color=ft.Colors.ORANGE_600,
+    )
+    openai_key = ft.TextField(
+        value="", label=_("OpenAI API Key"), password=True, can_reveal_password=True,
+        hint_text=_("留空表示不修改已保存的 OpenAI key"),
+        border_color=ft.Colors.ORANGE_300, focused_border_color=ft.Colors.ORANGE_600,
+    )
+    openai_model = ft.TextField(
+        value=_tx["openai_model"], label=_("OpenAI 转写模型"),
+        hint_text="gpt-4o-mini-transcribe",
+        border_color=ft.Colors.ORANGE_300, focused_border_color=ft.Colors.ORANGE_600,
+    )
+    openai_base = ft.TextField(
+        value=_tx["openai_base_url"], label=_("OpenAI Base URL（可选）"),
+        hint_text="https://api.openai.com/v1",
+        border_color=ft.Colors.ORANGE_300, focused_border_color=ft.Colors.ORANGE_600,
+    )
+    tx_status = ft.Text("", size=12)
+
+    def _save_tx(_):
+        set_transcription_config(
+            provider=tx_provider.value,
+            tencent_secret_id=tx_secret_id.value.strip() or None,
+            tencent_secret_key=tx_secret_key.value.strip() or None,
+            tencent_region=tx_region.value.strip(),
+            tencent_engine=tx_engine.value.strip(),
+            openai_api_key=openai_key.value.strip() or None,
+            openai_model=openai_model.value.strip(),
+            openai_base_url=openai_base.value.strip(),
+        )
+        tx_secret_id.value = ""
+        tx_secret_key.value = ""
+        openai_key.value = ""
+        tx_status.value = _("已保存。之后录音会先保存到 ELN_Data/audio，再按所选服务转写。")
+        tx_status.color = ft.Colors.GREEN_600
+        page.update()
+
+    tx_section = ft.Container(
+        content=ft.Column([
+            ft.Text(_("语音转写"), size=14, weight=ft.FontWeight.W_500),
+            ft.Text(_("选择录音转文字服务。音频文件单独保存在 ELN_Data/audio。"),
+                    size=12, color=ft.Colors.GREY_600),
+            tx_provider, tx_secret_id, tx_secret_key, tx_region, tx_engine,
+            openai_key, openai_model, openai_base,
+            ft.Row([
+                ft.ElevatedButton(_("保存语音转写"), on_click=_save_tx,
+                                  bgcolor=ft.Colors.ORANGE_600, color=ft.Colors.WHITE, height=32),
+            ]),
+            tx_status,
         ], spacing=8),
         border=ft.Border.all(1, ft.Colors.GREY_200),
         border_radius=8,
@@ -540,6 +627,7 @@ Common mistakes
                 server_info,
                 language_section,
                 ai_section,
+                tx_section,
                 notif_section,
                 protocol_help,
                 about_section,

@@ -43,6 +43,12 @@ def get_photos_dir() -> str:
     return base
 
 
+def get_audio_dir() -> str:
+    base = os.path.join(os.path.expanduser("~"), "ELN_Data", "audio")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
 def get_uploads_dir() -> str:
     base = os.path.join(os.path.expanduser("~"), "ELN_Data", "uploads")
     os.makedirs(base, exist_ok=True)
@@ -809,6 +815,12 @@ def delete_voice_note(note_id: int) -> bool:
 
 def get_inbox_dir() -> str:
     base = os.path.join(get_photos_dir(), "inbox")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def get_inbox_audio_dir() -> str:
+    base = os.path.join(get_audio_dir(), "inbox")
     os.makedirs(base, exist_ok=True)
     return base
 

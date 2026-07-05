@@ -43,6 +43,18 @@ def _photos_dir() -> str:
     return db_ops.get_photos_dir()
 
 
+def _audio_dir() -> str:
+    return db_ops.get_audio_dir()
+
+
+def _audio_url(rel_path: str) -> str:
+    clean = str(rel_path).replace("\\", "/")
+    audio_path = os.path.join(db_ops.get_audio_dir(), clean.replace("/", os.sep))
+    if os.path.exists(audio_path):
+        return "/audio/" + clean
+    return "/photos/" + clean
+
+
 def _html_response(content: str, **kwargs) -> HTMLResponse:
     """Return localized HTML for the native web pages."""
     return HTMLResponse(localize_html(content), **kwargs)
@@ -222,6 +234,8 @@ def logout():
 def mount_photos(application: FastAPI) -> None:
     photos_dir = _photos_dir()
     application.mount("/photos", StaticFiles(directory=photos_dir), name="photos")
+    audio_dir = _audio_dir()
+    application.mount("/audio", StaticFiles(directory=audio_dir), name="audio")
 
 
 # ─────────────────────────────────────────────
@@ -491,7 +505,7 @@ function speechSupported(){ return !!(window.SpeechRecognition || window.webkitS
 
 function toggleCapMic(){
   if(capVoice.recognizing || capVoice.mr){ stopCapMic(); return; }
-  if(speechSupported()) startCapSpeech(); else startCapRecord();
+  startCapRecord();
 }
 function setMicUI(on){
   const b = document.getElementById("capMic");
@@ -521,9 +535,11 @@ async function startCapRecord(){
   if(!(navigator.mediaDevices && window.MediaRecorder)){ document.getElementById("capHint").textContent="此环境不支持录音，请打字。"; return; }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-    const mr = new MediaRecorder(stream); capVoice.chunks=[];
+    const preferred = ["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"];
+    const mimeType = preferred.find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
+    const mr = mimeType ? new MediaRecorder(stream, {mimeType}) : new MediaRecorder(stream); capVoice.chunks=[];
     mr.ondataavailable = e => { if(e.data && e.data.size) capVoice.chunks.push(e.data); };
-    mr.onstop = () => { stream.getTracks().forEach(t=>t.stop()); const type=mr.mimeType||"audio/mp4"; const blob=new Blob(capVoice.chunks,{type}); capVoice.chunks=[]; if(blob.size>0){ heldAudio.blob=blob; renderThumbs(); document.getElementById("capHint").textContent="已录一段语音，存档后可在电脑端转写。"; } };
+    mr.onstop = () => { stream.getTracks().forEach(t=>t.stop()); const type=mr.mimeType||mimeType||"audio/mp4"; const blob=new Blob(capVoice.chunks,{type}); capVoice.chunks=[]; if(blob.size>0){ heldAudio.blob=blob; renderThumbs(); document.getElementById("capHint").textContent="已录一段语音，存档后会自动转写。"; } };
     capVoice.mr=mr; mr.start(); setMicUI(true);
   } catch(e){ document.getElementById("capHint").textContent="无法录音："+e.message; }
 }
@@ -1152,6 +1168,27 @@ def settings_page(request: Request):
         <input id="baseUrl" placeholder="兼容接口填 base_url，官方留空" /></div>
       <div class="save-row"><button class="green" onclick="saveAi()">保存</button><span class="small" id="saveHint"></span></div>
     </section>
+    <section>
+      <h2>语音转写</h2>
+      <p class="small" style="margin:0 0 14px">配置后，录音会先保存到本机，再调用转写 API，把文字回填到速记或实验语音记录。</p>
+      <div class="field"><label>转写服务</label>
+        <select id="txProvider"><option value="local">本地 faster-whisper</option><option value="tencent">腾讯云 ASR</option><option value="openai">OpenAI Speech-to-Text</option></select></div>
+      <div class="field"><label>腾讯云 SecretId</label>
+        <input id="txSecretId" type="password" placeholder="留空表示不修改已保存的 SecretId" autocomplete="off" /></div>
+      <div class="field"><label>腾讯云 SecretKey</label>
+        <input id="txSecretKey" type="password" placeholder="留空表示不修改已保存的 SecretKey" autocomplete="off" /></div>
+      <div class="field"><label>地域</label>
+        <input id="txRegion" placeholder="ap-shanghai" /></div>
+      <div class="field"><label>识别引擎</label>
+        <input id="txEngine" placeholder="16k_zh" /></div>
+      <div class="field"><label>OpenAI API Key</label>
+        <input id="openaiKey" type="password" placeholder="留空表示不修改已保存的 OpenAI key" autocomplete="off" /></div>
+      <div class="field"><label>OpenAI 模型</label>
+        <input id="openaiModel" placeholder="gpt-4o-mini-transcribe" /></div>
+      <div class="field"><label>OpenAI Base URL（可选）</label>
+        <input id="openaiBaseUrl" placeholder="https://api.openai.com/v1" /></div>
+      <div class="save-row"><button class="green" onclick="saveTranscription()">保存语音转写</button><span class="small" id="txHint"></span></div>
+    </section>
 {_HELP_HTML}
     <div class="about">局域网地址：{lan or "启动后可见"}<br/>数据存储于本机 ELN_Data，升级代码不影响数据。</div>
   </main>
@@ -1166,6 +1203,17 @@ async function load(){{
     document.getElementById("baseUrl").value = s.base_url || "";
     if(s.has_key) document.getElementById("apiKey").placeholder = "已设置（留空表示不修改）";
   }} catch {{}}
+  try {{
+    const t = await api("/api/settings/transcription");
+    document.getElementById("txProvider").value = t.provider || "local";
+    document.getElementById("txRegion").value = t.tencent_region || "ap-shanghai";
+    document.getElementById("txEngine").value = t.tencent_engine || "16k_zh";
+    document.getElementById("openaiModel").value = t.openai_model || "gpt-4o-mini-transcribe";
+    document.getElementById("openaiBaseUrl").value = t.openai_base_url || "https://api.openai.com/v1";
+    if(t.has_tencent_secret_id) document.getElementById("txSecretId").placeholder = "已设置（留空表示不修改）";
+    if(t.has_tencent_secret_key) document.getElementById("txSecretKey").placeholder = "已设置（留空表示不修改）";
+    if(t.has_openai_api_key) document.getElementById("openaiKey").placeholder = "已设置（留空表示不修改）";
+  }} catch {{}}
 }}
 async function saveAi(){{
   const hint = document.getElementById("saveHint");
@@ -1178,6 +1226,27 @@ async function saveAi(){{
       base_url: document.getElementById("baseUrl").value,
     }})}});
     document.getElementById("apiKey").value = "";
+    hint.textContent = "已保存"; hint.style.color = "var(--pos)";
+    load();
+  }} catch(e){{ hint.textContent = "失败：" + (e.message||e); hint.style.color = "var(--neg)"; }}
+}}
+async function saveTranscription(){{
+  const hint = document.getElementById("txHint");
+  hint.textContent = "保存中…"; hint.style.color = "var(--muted)";
+  try {{
+    await api("/api/settings/transcription", {{method:"POST", body: JSON.stringify({{
+      provider: document.getElementById("txProvider").value,
+      tencent_secret_id: document.getElementById("txSecretId").value,
+      tencent_secret_key: document.getElementById("txSecretKey").value,
+      tencent_region: document.getElementById("txRegion").value,
+      tencent_engine: document.getElementById("txEngine").value,
+      openai_api_key: document.getElementById("openaiKey").value,
+      openai_model: document.getElementById("openaiModel").value,
+      openai_base_url: document.getElementById("openaiBaseUrl").value,
+    }})}});
+    document.getElementById("txSecretId").value = "";
+    document.getElementById("txSecretKey").value = "";
+    document.getElementById("openaiKey").value = "";
     hint.textContent = "已保存"; hint.style.color = "var(--pos)";
     load();
   }} catch(e){{ hint.textContent = "失败：" + (e.message||e); hint.style.color = "var(--neg)"; }}
@@ -2575,10 +2644,8 @@ function speechSupported(){
 
 function initVoice(){
   const hint = document.getElementById("voiceHint");
-  if(speechSupported()){
-    hint.textContent = "点「开始说话」，边做实验边说，文字实时出现，保存后进入当前步骤。";
-  } else if(navigator.mediaDevices && window.MediaRecorder){
-    hint.textContent = "此浏览器不支持实时听写，改为录音上传，电脑端稍后自动转写。";
+  if(navigator.mediaDevices && window.MediaRecorder){
+    hint.textContent = "点「开始说话」录一段，停止后自动上传保存并转写。";
   } else {
     hint.textContent = "此环境不支持录音。点下方输入框，用键盘上的听写（麦克风键）也可以。";
   }
@@ -2593,8 +2660,7 @@ function setRecUI(on, label){
 
 function toggleVoiceRec(){
   if(voiceState.recognizing || voiceState.mediaRecorder){ stopVoiceRec(); return; }
-  if(speechSupported()) startSpeech();
-  else startRecording();
+  startRecording();
 }
 
 function startSpeech(){
@@ -2647,12 +2713,14 @@ async function startRecording(){
   }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-    const mr = new MediaRecorder(stream);
+    const preferred = ["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"];
+    const mimeType = preferred.find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
+    const mr = mimeType ? new MediaRecorder(stream, {mimeType}) : new MediaRecorder(stream);
     voiceState.chunks = [];
     mr.ondataavailable = e => { if(e.data && e.data.size) voiceState.chunks.push(e.data); };
     mr.onstop = async () => {
       stream.getTracks().forEach(t => t.stop());
-      const type = mr.mimeType || "audio/mp4";
+      const type = mr.mimeType || mimeType || "audio/mp4";
       const blob = new Blob(voiceState.chunks, {type});
       voiceState.chunks = [];
       if(blob.size > 0) await uploadVoiceAudio(blob, type);
@@ -3282,7 +3350,7 @@ async def upload_photo(
 def _voice_note_to_dict(note: dict) -> dict:
     d = dict(note)
     if d.get("audio_path"):
-        d["audio_url"] = "/photos/" + str(d["audio_path"]).replace("\\", "/")
+        d["audio_url"] = _audio_url(str(d["audio_path"]))
     return d
 
 
@@ -3312,8 +3380,8 @@ async def upload_voice_audio(
 ):
     if not db_ops.get_experiment(exp_id):
         raise HTTPException(404, "Experiment not found")
-    photos_dir = _photos_dir()
-    sub_dir = os.path.join(photos_dir, str(exp_id), "voice")
+    audio_dir = _audio_dir()
+    sub_dir = os.path.join(audio_dir, str(exp_id), "voice")
     os.makedirs(sub_dir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     ext = os.path.splitext(file.filename or "note.m4a")[1] or ".m4a"
@@ -3374,7 +3442,7 @@ def _inbox_to_dict(entry: dict) -> dict:
     d = dict(entry)
     d["image_urls"] = ["/photos/" + str(p).replace("\\", "/") for p in d.get("image_paths", [])]
     if d.get("audio_path"):
-        d["audio_url"] = "/photos/" + str(d["audio_path"]).replace("\\", "/")
+        d["audio_url"] = _audio_url(str(d["audio_path"]))
     return d
 
 
@@ -3418,7 +3486,10 @@ async def upload_inbox_media(
     entry = db_ops.get_inbox_entry(entry_id)
     if not entry:
         raise HTTPException(404, "Inbox entry not found")
-    sub_dir = os.path.join(db_ops.get_inbox_dir(), str(entry_id))
+    if kind == "audio":
+        sub_dir = os.path.join(db_ops.get_inbox_audio_dir(), str(entry_id))
+    else:
+        sub_dir = os.path.join(db_ops.get_inbox_dir(), str(entry_id))
     os.makedirs(sub_dir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     default_ext = ".m4a" if kind == "audio" else ".jpg"
@@ -3436,6 +3507,15 @@ async def upload_inbox_media(
     rel_path = f"inbox/{entry_id}/{filename}"
     if kind == "audio":
         updated = db_ops.set_inbox_audio(entry_id, rel_path)
+        try:
+            from server import voice as voice_worker
+            text = voice_worker.transcribe_path_once(filepath)
+            if text:
+                current_text = (updated.get("text") or "").strip() if updated else ""
+                merged = (current_text + "\n" + text).strip() if current_text else text
+                updated = db_ops.update_inbox_entry(entry_id, text=merged)
+        except Exception as exc:
+            print(f"[voice] inbox transcription failed for {entry_id}: {exc}")
     else:
         updated = db_ops.add_inbox_image(entry_id, rel_path)
     return _inbox_to_dict(updated)
@@ -3534,6 +3614,17 @@ class AiSettings(BaseModel):
     model: Optional[str] = None
 
 
+class TranscriptionSettings(BaseModel):
+    provider: Optional[str] = None
+    tencent_secret_id: Optional[str] = None
+    tencent_secret_key: Optional[str] = None
+    tencent_region: Optional[str] = None
+    tencent_engine: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    openai_base_url: Optional[str] = None
+    openai_model: Optional[str] = None
+
+
 @app.get("/api/ai/status")
 def ai_status():
     from utils.app_settings import get_ai_config
@@ -3565,6 +3656,53 @@ def post_settings_ai(body: AiSettings):
     set_ai_config(provider=body.provider, api_key=key,
                   base_url=body.base_url, model=body.model)
     return get_settings_ai()
+
+
+@app.get("/api/settings/transcription")
+def get_settings_transcription():
+    from utils.app_settings import get_transcription_config
+    cfg = get_transcription_config()
+    return {
+        "provider": cfg.get("provider"),
+        "tencent_region": cfg.get("tencent_region", ""),
+        "tencent_engine": cfg.get("tencent_engine", ""),
+        "openai_base_url": cfg.get("openai_base_url", ""),
+        "openai_model": cfg.get("openai_model", ""),
+        "has_tencent_secret_id": bool(cfg.get("tencent_secret_id")),
+        "has_tencent_secret_key": bool(cfg.get("tencent_secret_key")),
+        "has_openai_api_key": bool(cfg.get("openai_api_key")),
+    }
+
+
+@app.post("/api/settings/transcription")
+def post_settings_transcription(body: TranscriptionSettings):
+    from utils.app_settings import set_transcription_config
+    secret_id = (
+        body.tencent_secret_id
+        if (body.tencent_secret_id and body.tencent_secret_id.strip())
+        else None
+    )
+    secret_key = (
+        body.tencent_secret_key
+        if (body.tencent_secret_key and body.tencent_secret_key.strip())
+        else None
+    )
+    openai_key = (
+        body.openai_api_key
+        if (body.openai_api_key and body.openai_api_key.strip())
+        else None
+    )
+    set_transcription_config(
+        provider=body.provider,
+        tencent_secret_id=secret_id,
+        tencent_secret_key=secret_key,
+        tencent_region=body.tencent_region,
+        tencent_engine=body.tencent_engine,
+        openai_api_key=openai_key,
+        openai_base_url=body.openai_base_url,
+        openai_model=body.openai_model,
+    )
+    return get_settings_transcription()
 
 
 @app.post("/api/experiments/{exp_id}/ai_organize")

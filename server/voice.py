@@ -1,10 +1,12 @@
 """
 ELN App — Voice note transcription worker (optional).
 
-If `faster-whisper` is installed, audio voice notes uploaded from the phone
-are transcribed in a background thread and the text lands in the experiment
-record automatically. Without it, notes stay as playable audio marked
-"待转写" — nothing is lost.
+Audio voice notes uploaded from the phone are transcribed in a background
+thread and the text lands in the experiment record automatically. Tencent Cloud
+ASR or OpenAI speech-to-text can be configured for cloud transcription;
+otherwise the worker falls back to local `faster-whisper` when installed.
+Without any provider, notes stay as playable audio marked "待转写" — nothing is
+lost.
 
 Install (optional):
     python -m pip install faster-whisper
@@ -28,6 +30,18 @@ _model_failed = False
 
 def transcription_available() -> bool:
     try:
+        from server import openai_asr
+        if openai_asr.configured():
+            return True
+    except Exception:
+        pass
+    try:
+        from server import tencent_asr
+        if tencent_asr.configured():
+            return True
+    except Exception:
+        pass
+    try:
         import faster_whisper  # noqa: F401
         return True
     except Exception:
@@ -49,6 +63,20 @@ def _get_model():
 
 
 def _transcribe_file(path: str) -> str:
+    try:
+        from server import openai_asr
+        if openai_asr.configured():
+            return openai_asr.transcribe_file(path)
+    except Exception as exc:
+        print(f"[voice] OpenAI ASR failed, falling back if possible: {exc}")
+
+    try:
+        from server import tencent_asr
+        if tencent_asr.configured():
+            return tencent_asr.transcribe_file(path)
+    except Exception as exc:
+        print(f"[voice] Tencent ASR failed, falling back if possible: {exc}")
+
     model = _get_model()
     if model is None:
         raise RuntimeError("no transcription model")
@@ -78,7 +106,7 @@ def _worker_loop() -> None:
                     pass
             continue
         for note in pending:
-            path = os.path.join(db_ops.get_photos_dir(), note["audio_path"])
+            path = _resolve_audio_path(note["audio_path"])
             if not os.path.exists(path):
                 db_ops.update_voice_note(note["id"], status="audio_only")
                 continue
@@ -93,6 +121,23 @@ def _worker_loop() -> None:
             except Exception as exc:
                 print(f"[voice] transcription failed for note {note['id']}: {exc}")
                 db_ops.update_voice_note(note["id"], status="audio_only")
+
+
+def transcribe_path_once(path: str) -> str:
+    """Transcribe a saved audio file synchronously for inbox captures."""
+    return _transcribe_file(path)
+
+
+def _resolve_audio_path(rel_path: str) -> str:
+    rel = (rel_path or "").replace("/", os.sep)
+    candidates = [
+        os.path.join(db_ops.get_audio_dir(), rel),
+        os.path.join(db_ops.get_photos_dir(), rel),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return candidates[0]
 
 
 def ensure_worker() -> None:
