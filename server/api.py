@@ -372,6 +372,7 @@ def _bottom_nav(active: str, home_url: str) -> str:
     items = [
         ("capture", "note", "速记", "/capture"),
         ("run", "flask", "实验", "/run"),
+        ("history", "clock", "历史", "/history"),
         ("more", "more", "更多", "/more"),
     ]
     cells = "".join(
@@ -923,7 +924,6 @@ def more_page(request: Request):
     cards = [
         ("inbox", "inbox", "速记收件箱", "回看历史速记、听录音、看照片", "/inbox"),
         ("protocols", "flask", "协议库", "新建实验、导入或编辑协议", "/protocols"),
-        ("history", "note", "历史记录", "查看以往实验和报告", "/history"),
         ("settings", "settings", "设置", "AI 归档、访问信息", "/settings"),
     ]
     rows = "".join(
@@ -1085,12 +1085,11 @@ def history_page(request: Request):
     body = f"""
 <body>
   <header class="app-bar">
-    <a class="button secondary" href="/more">{web_ui.icon('chevron-left',18)} 更多</a>
     <h1>历史记录</h1>
     <button class="icon-btn" onclick="load()" title="刷新" aria-label="刷新">{web_ui.icon('refresh',18)}</button>
   </header>
   <main><div id="list"><div class="small">加载中…</div></div></main>
-{_bottom_nav("more", "/")}
+{_bottom_nav("history", "/")}
 <script>
 {web_ui.ICON_JS}
 function esc(v){{ return String(v ?? "").replace(/[&<>"']/g, s => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[s])); }}
@@ -1347,17 +1346,21 @@ _RUNNER_CSS = """
     #boardTitle { display:none; flex:1; min-width:0; font-weight:800; font-size:17px;
       white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .board-card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
-      box-shadow:var(--shadow); padding:14px 16px; margin:0 0 12px; }
-    .board-card .bc-main { cursor:pointer; }
+      box-shadow:var(--shadow); padding:14px 16px; margin:0 0 12px; cursor:pointer;
+      transition:border-color .12s ease, transform .06s ease; }
+    .board-card:hover { border-color:var(--clay-line, #e2cdbf); }
+    .board-card:active { transform:scale(.994); }
     .bc-top { display:flex; align-items:center; gap:10px; margin-bottom:9px; }
     .bc-name { flex:1; min-width:0; font-weight:800; font-size:16px; overflow-wrap:anywhere; }
     .bc-badge { flex:0 0 auto; font-size:11.5px; font-weight:700; padding:2px 9px; border-radius:999px;
       background:#efece7; color:#7a756d; white-space:nowrap; }
     .bc-badge.s-active { background:#f6e8df; color:#8a5a44; }
     .bc-badge.s-needs_wrapup { background:#fdf1d6; color:#8a6d1e; }
-    .bc-meta { font-size:12.5px; color:var(--muted); margin-top:6px; }
-    .bc-actions { display:flex; gap:8px; margin-top:12px; }
-    .bc-actions button { flex:1; min-height:42px; }
+    .bc-foot { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:8px; }
+    .bc-meta { font-size:12.5px; color:var(--muted); }
+    .bc-abandon { min-height:0; padding:2px 4px; background:none; box-shadow:none; border:0;
+      color:var(--faint); font-size:12px; font-weight:500; cursor:pointer; }
+    .bc-abandon:hover { color:#c0503a; text-decoration:underline; }
     .board-empty { text-align:center; color:var(--muted); padding:44px 12px; line-height:1.9; }
 
     .chips { display:flex; gap:7px; overflow-x:auto; padding:2px 2px 10px; scrollbar-width:none; }
@@ -1639,15 +1642,12 @@ function renderBoard(exps){
     const total = e.total_steps || 0, done = e.completed_steps || 0;
     const pct = total ? Math.round(done / total * 100) : 0;
     const label = STATUS_LABEL[e.status] || e.status || "";
-    return `<div class="board-card">
-      <div class="bc-main" onclick="enterExperiment('${e.id}')">
-        <div class="bc-top"><span class="bc-name">${esc(e.name)}</span><span class="bc-badge s-${esc(e.status)}">${esc(label)}</span></div>
-        <div class="progress"><div style="width:${pct}%"></div></div>
-        <div class="bc-meta">${done}/${total} 步 · ${pct}%</div>
-      </div>
-      <div class="bc-actions">
-        <button class="green" onclick="enterExperiment('${e.id}')">进入</button>
-        <button class="danger-ghost" onclick="abandonExperiment('${e.id}', ${esc(JSON.stringify(e.name))})">放弃</button>
+    return `<div class="board-card" onclick="enterExperiment('${e.id}')">
+      <div class="bc-top"><span class="bc-name">${esc(e.name)}</span><span class="bc-badge s-${esc(e.status)}">${esc(label)}</span></div>
+      <div class="progress"><div style="width:${pct}%"></div></div>
+      <div class="bc-foot">
+        <span class="bc-meta">${done}/${total} 步 · ${pct}%</span>
+        <button class="bc-abandon" onclick="event.stopPropagation(); abandonExperiment('${e.id}', ${esc(JSON.stringify(e.name))})">放弃</button>
       </div>
     </div>`;
   }).join("");
@@ -1666,7 +1666,7 @@ async function enterExperiment(id){
 }
 
 async function abandonExperiment(id, name){
-  if(!confirm("放弃实验「" + name + "」？它会移出看板，可在 更多 → 历史记录 里找到。")) return;
+  if(!confirm("放弃实验「" + name + "」？它会移出看板，可在 历史 里找到。")) return;
   try {
     await api(`/api/experiments/${id}`, {method:"PATCH", body: JSON.stringify({status:"abandoned"})});
     experiments = experiments.filter(e => String(e.id) !== String(id));

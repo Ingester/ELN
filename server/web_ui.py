@@ -24,6 +24,7 @@ ICONS = {
     "flask": '<path d="M14 2v6.3a2 2 0 0 0 .6 1.4l5.6 5.7A2 2 0 0 1 18.8 19H5.2a2 2 0 0 1-1.4-3.4l5.6-5.7A2 2 0 0 0 10 8.3V2"/><path d="M6.5 15h11"/><path d="M8.5 2h7"/>',
     "note": '<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.4 2.6a2 2 0 0 1 2.8 2.8L12 15l-4 1 1-4Z"/>',
     "more": '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+    "clock": '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
     "plus": '<path d="M12 5v14"/><path d="M5 12h14"/>',
     "x": '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
     "check": '<path d="M20 6 9 17l-5-5"/>',
