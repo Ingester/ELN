@@ -1669,6 +1669,14 @@ function renderBoard(exps){
 let boardTimers = {};
 let boardTimerKeys = "";
 
+// like fmt() but shows hours for long timers: 16:00:00, otherwise MM:SS
+function fmtHMS(sec){
+  sec = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const mm = String(m).padStart(2, "0"), ss = String(s).padStart(2, "0");
+  return h ? (h + ":" + mm + ":" + ss) : (mm + ":" + ss);
+}
+
 async function loadBoardTimers(){
   try {
     const list = await api("/api/timers/active");
@@ -1705,7 +1713,7 @@ function tickBoardTimers(){
     else { over = true; secs = t.overBase + Math.round((now - t.overSince) / 1000); }
     el.classList.toggle("over", over);
     const tv = el.querySelector(".tv");
-    if(tv) tv.textContent = (over ? "+" : "") + fmt(secs);
+    if(tv) tv.textContent = (over ? "+" : "") + fmtHMS(secs);
   }
 }
 
