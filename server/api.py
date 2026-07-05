@@ -416,6 +416,20 @@ _CAPTURE_CSS = _NAV_CSS + """
     #capMic.rec { background:var(--clay); border-color:var(--clay); color:#fff; }
     .archive-row { margin-top:16px; display:flex; gap:10px; }
     .archive-row button { flex:1; min-height:50px; font-size:15.5px; }
+    .pending-head { display:flex; justify-content:space-between; align-items:center; margin:22px 2px 8px; }
+    .pending-head h2 { margin:0; font-size:12px; color:var(--faint); text-transform:none; letter-spacing:.04em; }
+    .pending-head .edit-link { font-size:13px; }
+    .pending-item { display:flex; gap:10px; background:var(--inset); border:1px solid var(--line);
+      border-radius:12px; padding:10px; margin-bottom:8px; align-items:flex-start; }
+    .pending-item .thumb { width:48px; height:48px; flex:0 0 auto; }
+    .pending-item .edit-thumb { cursor:pointer; }
+    .pending-item .pt { flex:1; min-width:0; font-size:14px; overflow-wrap:anywhere; }
+    .pending-item .pm { font-size:12px; color:var(--muted); margin-top:2px; }
+    .pending-edit { display:none; margin-top:8px; }
+    .pending-edit.open { display:block; }
+    .pending-edit textarea { min-height:92px; font-size:14px; background:#fff; }
+    .pending-edit .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+    .pending-edit button { min-height:36px; padding:6px 12px; font-size:13.5px; }
 """
 
 _CAPTURE_BODY = """
@@ -445,6 +459,12 @@ _CAPTURE_BODY = """
       </div>
       <div class="small" id="capHint" style="margin-top:8px"></div>
     </section>
+
+    <div class="pending-head">
+      <h2>待归档</h2>
+      <a class="edit-link" href="/inbox">全部 · 历史 __I_ARR__</a>
+    </div>
+    <div id="pendingList"></div>
   </main>
 __NAV__
 <script>
@@ -560,22 +580,75 @@ async function archive(){
     heldImages.length = 0; heldAudio.blob = null; renderThumbs();
     document.getElementById("capHint").textContent = "已存进收件箱";
     setTimeout(()=>{ document.getElementById("capHint").textContent=""; }, 2500);
-    loadInboxCount();
+    loadPending();
   } catch(e){
     document.getElementById("capHint").textContent = "存档失败："+(e.message||e);
   } finally { btn.disabled = false; }
 }
 
-async function loadInboxCount(){
+async function loadPending(){
   try {
     const items = await api("/api/inbox?status=pending");
     const c = document.getElementById("inboxCount");
     if(c) c.textContent = items.length ? (" " + items.length) : "";
+    const box = document.getElementById("pendingList");
+    if(!items.length){ box.innerHTML = '<div class="small" style="padding:0 2px">还没有待归档的速记。</div>'; return; }
+    box.innerHTML = items.map(it => {
+      const thumb = it.image_urls && it.image_urls[0]
+        ? `<span class="thumb edit-thumb" onclick="openPendingEdit(${it.id})" role="button" title="修改识别文字" aria-label="修改识别文字"><img src="${esc(it.image_urls[0])}"></span>`
+        : `<span class="thumb ph edit-thumb" onclick="openPendingEdit(${it.id})" role="button" title="修改识别文字" aria-label="修改识别文字">${svgIcon(it.audio_url && !it.text ? "audio" : "note", 20)}</span>`;
+      const t = new Date(it.created_at); const hh = String(t.getHours()).padStart(2,"0")+":"+String(t.getMinutes()).padStart(2,"0");
+      const body = it.text ? esc(it.text) : (it.audio_url ? "语音待识别或未识别到文字" : "图片");
+      const raw = esc(it.text || "");
+      return `<div class="pending-item" id="pending-${it.id}">
+        ${thumb}
+        <div class="pt">
+          <div id="pending-text-${it.id}">${body}</div>
+          <div class="pm">${hh}${it.hinted_experiment_id?" · 已标实验":""}</div>
+          <div class="pending-edit" id="pending-edit-${it.id}">
+            <textarea id="pending-raw-${it.id}" placeholder="修改识别文字">${raw}</textarea>
+            <div class="row">
+              <button class="green" onclick="savePendingText(${it.id})">保存</button>
+              <button class="secondary" onclick="closePendingEdit(${it.id})">取消</button>
+              <span class="small" id="pending-status-${it.id}"></span>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    }).join("");
   } catch {}
 }
 
+function openPendingEdit(id){
+  const panel = document.getElementById("pending-edit-"+id);
+  const ta = document.getElementById("pending-raw-"+id);
+  if(panel) panel.classList.add("open");
+  if(ta) setTimeout(() => { ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length; }, 30);
+}
+function closePendingEdit(id){
+  const panel = document.getElementById("pending-edit-"+id);
+  const st = document.getElementById("pending-status-"+id);
+  if(panel) panel.classList.remove("open");
+  if(st) st.textContent = "";
+}
+async function savePendingText(id){
+  const ta = document.getElementById("pending-raw-"+id);
+  const st = document.getElementById("pending-status-"+id);
+  if(!ta) return;
+  try {
+    if(st) st.textContent = "保存中…";
+    const updated = await api(`/api/inbox/${id}`, {method:"PATCH", body: JSON.stringify({text: ta.value})});
+    const textNode = document.getElementById("pending-text-"+id);
+    if(textNode) textNode.textContent = updated.text || (updated.audio_url ? "语音待识别或未识别到文字" : "图片");
+    if(st) st.textContent = "已保存";
+    setTimeout(() => closePendingEdit(id), 700);
+  } catch(e){
+    if(st) st.textContent = "保存失败：" + (e.message || e);
+  }
+}
+
 loadExperiments();
-loadInboxCount();
+loadPending();
 </script>
 </body>
 </html>
