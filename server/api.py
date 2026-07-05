@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import io
 import os
 import json
 import shutil
@@ -17,7 +18,7 @@ from urllib.parse import parse_qs, quote
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1342,6 +1343,23 @@ _RUNNER_CSS = """
     .queue-info { color:var(--muted); font-size:12.5px; margin:2px 4px 8px; min-height:0; }
     .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:16px; margin:0 0 14px; box-shadow:var(--shadow); }
 
+    #board { display:none; }
+    #boardTitle { display:none; flex:1; min-width:0; font-weight:800; font-size:17px;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .board-card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+      box-shadow:var(--shadow); padding:14px 16px; margin:0 0 12px; }
+    .board-card .bc-main { cursor:pointer; }
+    .bc-top { display:flex; align-items:center; gap:10px; margin-bottom:9px; }
+    .bc-name { flex:1; min-width:0; font-weight:800; font-size:16px; overflow-wrap:anywhere; }
+    .bc-badge { flex:0 0 auto; font-size:11.5px; font-weight:700; padding:2px 9px; border-radius:999px;
+      background:#efece7; color:#7a756d; white-space:nowrap; }
+    .bc-badge.s-active { background:#f6e8df; color:#8a5a44; }
+    .bc-badge.s-needs_wrapup { background:#fdf1d6; color:#8a6d1e; }
+    .bc-meta { font-size:12.5px; color:var(--muted); margin-top:6px; }
+    .bc-actions { display:flex; gap:8px; margin-top:12px; }
+    .bc-actions button { flex:1; min-height:42px; }
+    .board-empty { text-align:center; color:var(--muted); padding:44px 12px; line-height:1.9; }
+
     .chips { display:flex; gap:7px; overflow-x:auto; padding:2px 2px 10px; scrollbar-width:none; }
     .chips::-webkit-scrollbar { display:none; }
     .chip {
@@ -1468,14 +1486,17 @@ _RUNNER_CSS = """
 _RUNNER_BODY = """
 <body>
   <header class="app-bar">
-    <div class="exp-wrap">
+    <button class="icon-btn" id="boardBackBtn" onclick="showBoard()" title="返回看板" aria-label="返回看板" style="display:none">__I_BACK__</button>
+    <div class="exp-wrap" id="expWrap">
       <select id="experimentSelect" onchange="selectExperiment(this.value)" aria-label="选择实验"></select>
     </div>
+    <span id="boardTitle">实验看板</span>
     <span id="net" class="status">连接中</span>
     <button class="icon-btn" id="micBtn" onclick="openVoicePanel()" title="语音速记" aria-label="语音速记">__I_MIC__</button>
-    <button class="icon-btn" onclick="loadExperiments()" title="刷新" aria-label="刷新">__I_REFRESH__</button>
+    <button class="icon-btn" onclick="refreshCurrent()" title="刷新" aria-label="刷新">__I_REFRESH__</button>
   </header>
   <main>
+    <div id="board"></div>
     <div id="queueInfo" class="queue-info"></div>
     <section id="steps"></section>
   </main>
@@ -1576,20 +1597,88 @@ async function loadExperiments(){
   try {
     const active = await api("/api/experiments?status=active");
     const wrap = await api("/api/experiments?status=needs_wrapup");
-    const exps = [...active, ...wrap];
-    experiments = exps;
-    localStorage.setItem(LS.experiments, JSON.stringify(exps));
-    if(!selectedExperiment && exps[0]) selectedExperiment = String(exps[0].id);
-    localStorage.setItem(LS.selected, selectedExperiment);
-    renderExperiments(exps);
-    if(selectedExperiment) await loadSteps(selectedExperiment);
+    experiments = [...active, ...wrap];
+    localStorage.setItem(LS.experiments, JSON.stringify(experiments));
+    renderExperiments(experiments);
     net("已连接", true);
   } catch(e) {
     net("离线缓存", false);
     experiments = JSON.parse(localStorage.getItem(LS.experiments) || "[]");
     renderExperiments(experiments);
-    if(selectedExperiment) renderSteps(JSON.parse(localStorage.getItem(stepKey(selectedExperiment)) || "[]"));
   }
+  return experiments;
+}
+
+let view = "board";
+const STATUS_LABEL = {active:"进行中", needs_wrapup:"待收尾", completed:"已完成", abandoned:"已放弃", archived:"已归档"};
+
+function setHeaderMode(v){
+  view = v;
+  const board = v === "board";
+  document.getElementById("boardBackBtn").style.display = board ? "none" : "inline-flex";
+  document.getElementById("expWrap").style.display = board ? "none" : "block";
+  document.getElementById("boardTitle").style.display = board ? "block" : "none";
+  document.getElementById("micBtn").style.display = board ? "none" : "inline-flex";
+  document.getElementById("board").style.display = board ? "block" : "none";
+  document.getElementById("steps").style.display = board ? "none" : "block";
+  document.getElementById("queueInfo").style.display = board ? "none" : "block";
+}
+
+function showBoard(){
+  setHeaderMode("board");
+  renderBoard(experiments);
+}
+
+function renderBoard(exps){
+  const root = document.getElementById("board");
+  if(!exps || !exps.length){
+    root.innerHTML = '<div class="board-empty">还没有进行中的实验。<br><a href="/protocols">去协议库新建实验 →</a></div>';
+    return;
+  }
+  root.innerHTML = exps.map(e => {
+    const total = e.total_steps || 0, done = e.completed_steps || 0;
+    const pct = total ? Math.round(done / total * 100) : 0;
+    const label = STATUS_LABEL[e.status] || e.status || "";
+    return `<div class="board-card">
+      <div class="bc-main" onclick="enterExperiment('${e.id}')">
+        <div class="bc-top"><span class="bc-name">${esc(e.name)}</span><span class="bc-badge s-${esc(e.status)}">${esc(label)}</span></div>
+        <div class="progress"><div style="width:${pct}%"></div></div>
+        <div class="bc-meta">${done}/${total} 步 · ${pct}%</div>
+      </div>
+      <div class="bc-actions">
+        <button class="green" onclick="enterExperiment('${e.id}')">进入</button>
+        <button class="danger-ghost" onclick="abandonExperiment('${e.id}', ${esc(JSON.stringify(e.name))})">放弃</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function enterExperiment(id){
+  selectedExperiment = String(id);
+  localStorage.setItem(LS.selected, selectedExperiment);
+  initializedStepPosition[id] = false;
+  if(!experiments.find(e => String(e.id) === String(id))){
+    try { const full = await api(`/api/experiments/${id}`); experiments.push(full); } catch {}
+  }
+  renderExperiments(experiments);
+  setHeaderMode("exp");
+  await loadSteps(selectedExperiment);
+}
+
+async function abandonExperiment(id, name){
+  if(!confirm("放弃实验「" + name + "」？它会移出看板，可在 更多 → 历史记录 里找到。")) return;
+  try {
+    await api(`/api/experiments/${id}`, {method:"PATCH", body: JSON.stringify({status:"abandoned"})});
+    experiments = experiments.filter(e => String(e.id) !== String(id));
+    await loadExperiments();
+    showBoard();
+  } catch(e){ alert("放弃失败：" + (e.message || e)); }
+}
+
+async function refreshCurrent(){
+  await loadExperiments();
+  if(view === "board"){ showBoard(); }
+  else if(selectedExperiment){ await loadSteps(selectedExperiment); }
 }
 
 function currentExperiment(){
@@ -1806,12 +1895,13 @@ function renderAttachments(step, attachments){
       data-step-id="${step.id}" data-path="${esc(item.path)}" data-name="${esc(item.name)}"
       onclick="renameAttachment(this)">${svgIcon("pencil",15)}</button>`;
     if(isImageAttachment(item.path)){
+      const disp = displayUrl(item.path);   // TIFF/BMP → server-rendered PNG preview
       return `<span class="attachment-item image">
-        <a class="attachment-preview" href="${esc(url)}" target="_blank" rel="noopener" title="打开原图">
-          <img src="${esc(url)}" alt="${esc(item.name)}" loading="lazy" />
+        <a class="attachment-preview" href="${esc(disp)}" target="_blank" rel="noopener" title="打开预览">
+          <img src="${esc(disp)}" alt="${esc(item.name)}" loading="lazy" />
         </a>
         <span class="attachment-caption">
-          <a href="${esc(url)}" target="_blank" rel="noopener" title="${esc(item.name)}">${esc(item.name)}</a>
+          <a href="${esc(url)}" target="_blank" rel="noopener" title="${esc(item.name)}（下载原图）">${esc(item.name)}</a>
           ${renameButton}
         </span>
       </span>`;
@@ -1826,6 +1916,15 @@ function renderAttachments(step, attachments){
 function attachmentUrl(path){
   const clean = String(path || "").replace(/\\\\/g, "/").replace(/^\\/+/, "");
   return "/photos/" + clean.split("/").map(encodeURIComponent).join("/");
+}
+
+function needsConvert(path){ return /\\.(tiff?|bmp)$/i.test(String(path || "")); }
+
+// URL to show in <img>: browsers can't render TIFF/BMP, so use the server PNG preview.
+function displayUrl(path){
+  if(!needsConvert(path)) return attachmentUrl(path);
+  const clean = String(path || "").replace(/\\\\/g, "/").replace(/^\\/+/, "");
+  return "/api/preview?path=" + encodeURIComponent(clean);
 }
 
 function isImageAttachment(path){
@@ -2976,8 +3075,15 @@ function applyBackTarget(){
 }
 renderQueueInfo();
 applyBackTarget();
-loadExperiments();
 initVoice();
+
+async function initRunner(){
+  await loadExperiments();
+  const urlExp = new URLSearchParams(window.location.search).get("experiment_id");
+  if(urlExp){ await enterExperiment(urlExp); }
+  else { showBoard(); }
+}
+initRunner();
 </script>
 """
 
@@ -2988,7 +3094,7 @@ def experiment_runner(experiment_id: Optional[int] = Query(None)):
     body = _RUNNER_BODY.replace("__ICON_JS__", web_ui.ICON_JS)
     body = _fill_icons(body, {
         "__I_REFRESH__": ("refresh", 18), "__I_MIC__": ("mic", 18),
-        "__I_SPARK__": ("sparkle", 17),
+        "__I_SPARK__": ("sparkle", 17), "__I_BACK__": ("chevron-left", 20),
     })
     return _html_response(
         web_ui.page_head("ELN 实验执行", _NAV_CSS + _RUNNER_CSS)
@@ -3690,6 +3796,40 @@ def experiment_summaries(status: Optional[str] = Query("active,needs_wrapup")):
         }
         for r in rows
     ]
+
+
+@app.get("/api/preview")
+def image_preview(path: str = Query(...), max: int = Query(1600, ge=64, le=4096)):
+    """Render formats browsers can't show in <img> (TIFF, BMP) as PNG for preview.
+    Serves a downscaled PNG from the original file under the photos dir."""
+    try:
+        from PIL import Image
+    except Exception:
+        raise HTTPException(500, "Pillow 未安装，无法预览此格式")
+    base = os.path.realpath(_photos_dir())
+    clean = str(path).replace("\\", "/").lstrip("/")
+    full = os.path.realpath(os.path.join(base, clean.replace("/", os.sep)))
+    if full != base and not full.startswith(base + os.sep):
+        raise HTTPException(403, "非法路径")
+    if not os.path.isfile(full):
+        raise HTTPException(404, "文件不存在")
+    try:
+        with Image.open(full) as im:
+            try:
+                im.seek(0)  # first page of multi-page TIFF
+            except Exception:
+                pass
+            if im.mode not in ("RGB", "RGBA", "L"):
+                im = im.convert("RGB")
+            im.thumbnail((max, max))
+            buf = io.BytesIO()
+            im.save(buf, format="PNG")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(415, f"无法渲染此图片：{exc}")
+    return Response(content=buf.getvalue(), media_type="image/png",
+                    headers={"Cache-Control": "max-age=3600"})
 
 
 class AiOrganizeRequest(BaseModel):

@@ -8,6 +8,9 @@ flet>=0.21.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 
+# Image handling — preview TIFF/BMP attachments in the browser (converted to PNG)
+Pillow>=10.0.0
+
 # Notifications (Windows)
 # win10toast>=0.9  # optional, Windows only
 
