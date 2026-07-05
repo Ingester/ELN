@@ -1,45 +1,57 @@
 # ELN 速记收件箱 — AI 归档说明
 
 当用户说“归档 ELN 收件箱”“把收件箱整理进实验记录”之类时，按下面做。
-目标：把用户随手记的口语/照片速记，整理成规范实验记录，**以“建议”提交**，由用户在浏览器 `/inbox` 逐条确认后才真正写入。**你只提交建议，绝不直接写入。**
+目标：把用户随手记的口语/照片速记，提炼成规范实验记录，**直接写进对应实验的对应步骤**。
+但**先把完整计划列给用户看，等他明确确认后再写**。绝不未经确认就写入或新建实验。
 
 本地接口：`http://127.0.0.1:8600`（本机访问免密码）。
 
-## 步骤
+## 一、读取
 
-1. 取待归档条目：
-   `GET /api/inbox?status=pending`
+1. 取待归档速记：`GET /api/inbox?status=pending`
    每条含：`id`、`text`（口语文字，可能空）、`image_urls`（图片直链数组）、`audio_url`、`hinted_experiment_id`（用户可能已标的实验，可空）、`created_at`。
+   - 有图片就打开 `image_urls`（形如 `http://127.0.0.1:8600/photos/inbox/<id>/<file>`）看清内容；也可直接读本机 `~/ELN_Data/photos/<image_path>`。
+   - 只有 `audio_url` 而 `text` 为空 = 语音还没转写，别猜内容，提醒用户。
 
-2. 了解有哪些实验和步骤：
-   `GET /api/experiment_summaries?status=active,needs_wrapup` → 实验列表（`id`、`name`、进度）。
-   对可能相关的实验：`GET /api/experiments/{id}/steps` → 步骤（`id`、`step_index`、`title`、`description`、`fields`：每个含 `key`/`label`/`type`/`options`、`values` 当前值）。
+2. 了解实验与步骤：
+   `GET /api/experiment_summaries` → 实验列表（`id`、`name`、进度）。
+   对相关实验：`GET /api/experiments/{id}/steps` → 每步含 `id`、`step_index`、`title`、`description`、`fields`（每个 `key`/`label`/`type`/`options`）、`values`（当前已填值）。
 
-3. 对每一条待归档条目判断归属：
-   - 若有图片，读取 `image_urls`（形如 `http://127.0.0.1:8600/photos/inbox/<id>/<file>`）看清内容；也可直接读本机文件 `~/ELN_Data/photos/<image_path>`。
-   - 判断它属于**哪个实验、哪一步**。`hinted_experiment_id` 有值时优先采用。
-   - 写一段**规范中文备注**，忠实于用户所说，不要添加用户没说的结论。
-   - **只有用户明确提到数值时**才填字段：匹配该步骤的 `field.key`；数值带单位时只填数字部分。绝不编造数字。
-   - 如果明显不属于任何 active/needs_wrapup 实验，不要硬塞进旧实验。把这条作为“建议新建实验”处理：在 `reason` 里写清建议实验名、建议步骤、为什么现有实验不匹配；等用户确认后再新建。
+## 二、整理，并把计划发给用户（先别写）
 
-4. 提交建议（**不要**调用 apply）：
-   `POST /api/inbox/{id}/proposal`
-   ```json
-   {
-     "experiment_id": 3,
-     "step_id": 12,
-     "note": "加样时观察到样品轻微浑浊",
-     "fields": [{"key": "vol", "value": "12", "reason": "用户说加了大约12微升"}],
-     "reason": "提到加样和浑浊，对应第1步加样"
-   }
-   ```
-   实在无法归入任何实验的，可省略 `experiment_id`/`step_id`，在 `reason` 里说明，让用户手动处理。
-   若是建议新建实验，也省略 `experiment_id`/`step_id`，并在 `reason` 里用“建议新建实验：...”开头。
+逐条速记：
+- 提炼关键信息：去掉语音输入的重复和啰嗦，**忠实原意、不要编造**用户没说的结论。
+- 判断它属于哪个实验、哪一步、该填哪些字段。`hinted_experiment_id` 有值时优先。
+- **数值只有用户明确说了才填**；带单位只填数字部分，绝不编造数字。
+- 一条速记的内容可以**拆开写到多个步骤/字段**（分散落位）。
+- 那一步**没有合适的字段**时，可以给这步**新增一个字段**来承载，或写进该步备注。
+- 明显不属于任何现有实验的，**提议新建实验**（给出实验名、步骤结构；结构参考仓库根目录 `ELN_Protocol_Format.md` 和 `protocol_templates/`）。
 
-5. 全部提交后，告诉用户共处理了几条，提示他到浏览器 `/inbox` 逐条确认（数字类字段请他核对）。
+把上面整理成一份**清单**发给用户：每条速记 → 目标实验/步骤 → 要写入的值 / 要新增的字段 / 要新建的实验。
+**然后停下，等用户确认。**
+
+## 三、用户确认后再写（颗粒接口，直接写）
+
+写之前先记下每处的**旧值**，方便用户让你撤销。
+
+- **写入某步**：先 `GET /api/steps/{step_id}` 拿当前 `values` 和 `fields`；把要写的值并进 `values`；
+  `PATCH /api/steps/{step_id}`，body `{"values_json": "<整个 values 的 JSON 字符串>"}`。
+  备注可并进该步的备注字段。
+- **新增字段**（当前步没有合适的框时）：在原 `fields` 数组后追加 `{"key","label","type"，需要时"options"}`，
+  同一次 `PATCH` 传 `{"fields_json": "<整个 fields 的 JSON 字符串>", "values_json": "<含新 key 值的 values>"}`。
+- **新建实验**：`POST /api/experiments`，body `{"name":"...","protocol_json":"<ProtocolDefinition 的 JSON 字符串>"}`；
+  建好后按上面往它的步骤写。
+- **每条写完，标记已归档**：`POST /api/inbox/{id}/filed`，body
+  `{"experiment_id":3,"step_id":12,"summary":"一句话说明写了什么"}`
+  （把这条移出待办、留档给用户在 `/inbox` 回看）。
+
+## 四、汇报
+
+全部写完，逐条告诉用户：写到了哪个实验哪一步、加了什么字段、建了什么实验。
+哪条放错了，用户会让你改或撤销——你用 `PATCH` 把该步 `values_json`/`fields_json` 还原回旧值即可。
 
 ## 规则
-- 一条速记最多一个建议；同一条的多点观察合并进一个 note。
-- 忠实、可核对；证据不足就在 `reason` 里说明，不要硬编。
-- 不要调用 `/api/inbox/{id}/apply` —— 写入由用户在浏览器确认。
-- 不要未经用户确认就调用 `POST /api/experiments` 新建实验；用户确认新建后，再用最小可执行 protocol_json 建实验并把速记写进对应步骤。
+
+- **先计划、后写入**：没得到用户明确确认前，不 `PATCH` 任何 step、不 `POST /api/experiments`。
+- 忠实、可核对；证据不足就在计划里说明，别硬编。
+- 旧的 `POST /api/inbox/{id}/proposal` 和 `/apply` 已不再使用；直接用颗粒接口写，再 `/filed` 标记。

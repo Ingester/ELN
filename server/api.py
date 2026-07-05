@@ -370,7 +370,6 @@ def _flet_home_url(request: Request) -> str:
 def _bottom_nav(active: str, home_url: str) -> str:
     items = [
         ("capture", "note", "速记", "/capture"),
-        ("inbox", "inbox", "收件箱", "/inbox"),
         ("run", "flask", "实验", "/run"),
         ("more", "more", "更多", "/more"),
     ]
@@ -417,21 +416,6 @@ _CAPTURE_CSS = _NAV_CSS + """
     #capMic.rec { background:var(--clay); border-color:var(--clay); color:#fff; }
     .archive-row { margin-top:16px; display:flex; gap:10px; }
     .archive-row button { flex:1; min-height:50px; font-size:15.5px; }
-    .pending-head { display:flex; justify-content:space-between; align-items:center; margin:22px 2px 8px; }
-    .pending-head h2 { margin:0; font-size:12px; color:var(--faint); text-transform:none; letter-spacing:.04em; }
-    .pending-head .right { display:flex; gap:10px; align-items:center; }
-    .pending-item { display:flex; gap:10px; background:var(--inset); border:1px solid var(--line);
-      border-radius:12px; padding:10px; margin-bottom:8px; align-items:flex-start; }
-    .pending-item .thumb { width:48px; height:48px; flex:0 0 auto; }
-    .pending-item .pt { flex:1; min-width:0; font-size:14px; overflow-wrap:anywhere; }
-    .pending-item .pm { font-size:12px; color:var(--muted); margin-top:2px; }
-    .pending-item .pa { display:flex; gap:6px; flex:0 0 auto; }
-    .pending-item .icon-btn { min-width:34px; min-height:34px; padding:6px; background:#fff; }
-    .pending-edit { display:none; margin-top:8px; }
-    .pending-edit.open { display:block; }
-    .pending-edit textarea { min-height:92px; font-size:14px; background:#fff; }
-    .pending-edit .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
-    .pending-edit button { min-height:36px; padding:6px 12px; font-size:13.5px; }
 """
 
 _CAPTURE_BODY = """
@@ -461,14 +445,6 @@ _CAPTURE_BODY = """
       </div>
       <div class="small" id="capHint" style="margin-top:8px"></div>
     </section>
-
-    <div class="pending-head">
-      <h2>待归档</h2>
-      <div class="right">
-        <a class="edit-link" href="/inbox">AI 整理 / 确认 __I_ARR__</a>
-      </div>
-    </div>
-    <div id="pendingList"></div>
   </main>
 __NAV__
 <script>
@@ -584,76 +560,22 @@ async function archive(){
     heldImages.length = 0; heldAudio.blob = null; renderThumbs();
     document.getElementById("capHint").textContent = "已存进收件箱";
     setTimeout(()=>{ document.getElementById("capHint").textContent=""; }, 2500);
-    loadPending();
+    loadInboxCount();
   } catch(e){
     document.getElementById("capHint").textContent = "存档失败："+(e.message||e);
   } finally { btn.disabled = false; }
 }
 
-async function loadPending(){
+async function loadInboxCount(){
   try {
     const items = await api("/api/inbox?status=pending");
     const c = document.getElementById("inboxCount");
     if(c) c.textContent = items.length ? (" " + items.length) : "";
-    const box = document.getElementById("pendingList");
-    if(!items.length){ box.innerHTML = '<div class="small" style="padding:0 2px">还没有待归档的速记。</div>'; return; }
-    box.innerHTML = items.slice(0,6).map(it => {
-      const thumb = it.image_urls && it.image_urls[0]
-        ? `<span class="thumb"><img src="${esc(it.image_urls[0])}"></span>`
-        : `<span class="thumb ph">${svgIcon(it.audio_url && !it.text ? "audio" : "note", 20)}</span>`;
-      const t = new Date(it.created_at); const hh = String(t.getHours()).padStart(2,"0")+":"+String(t.getMinutes()).padStart(2,"0");
-      const body = it.text ? esc(it.text) : (it.audio_url ? "语音待识别或未识别到文字" : "图片");
-      const raw = esc(it.text || "");
-      return `<div class="pending-item" id="pending-${it.id}">
-        ${thumb}
-        <div class="pt">
-          <div id="pending-text-${it.id}">${body}</div>
-          <div class="pm">${hh}${it.hinted_experiment_id?" · 已标实验":""}</div>
-          <div class="pending-edit" id="pending-edit-${it.id}">
-            <textarea id="pending-raw-${it.id}" placeholder="修改语音识别文字">${raw}</textarea>
-            <div class="row">
-              <button class="green" onclick="savePendingText(${it.id})">保存</button>
-              <button class="secondary" onclick="closePendingEdit(${it.id})">取消</button>
-              <span class="small" id="pending-status-${it.id}"></span>
-            </div>
-          </div>
-        </div>
-        <div class="pa"><button class="icon-btn" onclick="openPendingEdit(${it.id})" title="修改识别文字" aria-label="修改识别文字">${svgIcon("pencil",15)}</button></div>
-      </div>`;
-    }).join("");
   } catch {}
 }
 
-function openPendingEdit(id){
-  const panel = document.getElementById("pending-edit-"+id);
-  const ta = document.getElementById("pending-raw-"+id);
-  if(panel) panel.classList.add("open");
-  if(ta) setTimeout(() => { ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length; }, 30);
-}
-function closePendingEdit(id){
-  const panel = document.getElementById("pending-edit-"+id);
-  const st = document.getElementById("pending-status-"+id);
-  if(panel) panel.classList.remove("open");
-  if(st) st.textContent = "";
-}
-async function savePendingText(id){
-  const ta = document.getElementById("pending-raw-"+id);
-  const st = document.getElementById("pending-status-"+id);
-  if(!ta) return;
-  try {
-    if(st) st.textContent = "保存中…";
-    const updated = await api(`/api/inbox/${id}`, {method:"PATCH", body: JSON.stringify({text: ta.value})});
-    const textNode = document.getElementById("pending-text-"+id);
-    if(textNode) textNode.textContent = updated.text || (updated.audio_url ? "语音待识别或未识别到文字" : "图片");
-    if(st) st.textContent = "已保存";
-    setTimeout(() => closePendingEdit(id), 700);
-  } catch(e){
-    if(st) st.textContent = "保存失败：" + (e.message || e);
-  }
-}
-
 loadExperiments();
-loadPending();
+loadInboxCount();
 </script>
 </body>
 </html>
@@ -713,22 +635,36 @@ _INBOX_CSS = _NAV_CSS + """
     .ai-panel.open { display:block; }
     .ai-panel pre { background:var(--inset); border:1px solid var(--line); border-radius:10px; padding:12px;
       font-size:12.5px; line-height:1.55; white-space:pre-wrap; word-break:break-word; max-height:280px; overflow:auto; }
+    .chips { display:flex; gap:8px; margin:2px 2px 14px; }
+    .chip { min-height:34px; padding:6px 14px; font-size:13px; border-radius:999px; background:var(--card);
+      border:1px solid var(--line); color:var(--muted); box-shadow:none; }
+    .chip.active { background:var(--clay-soft); border-color:var(--clay-line); color:var(--clay-ink); font-weight:600; }
+    .badge { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11.5px; font-weight:600; }
+    .badge.pending { background:var(--clay-soft); color:var(--clay-ink); }
+    .badge.filed { background:#e6f2e9; color:#2e6b45; }
+    .badge.dismissed { background:var(--inset); color:var(--faint); }
+    .filed-to { border:1px solid #cfe6d6; background:#eef6f0; border-radius:12px; padding:10px 12px; margin:10px 0;
+      color:#2e6b45; font-size:13.5px; line-height:1.5; }
+    .filed-to .lbl { display:inline-flex; align-items:center; gap:4px; font-weight:600; }
+    .filed-to .lbl svg { stroke-width:1.9; }
+    .filed-to .rs { color:#3d7a55; margin-top:4px; overflow-wrap:anywhere; }
+    .raw-edit textarea { min-height:80px; }
 """
 
 _INBOX_BODY = """
 <body>
   <header class="app-bar">
-    <a class="button secondary" href="/capture">__I_BACK__ 速记</a>
-    <h1>收件箱</h1>
+    <a class="button secondary" href="/more">__I_BACK__ 更多</a>
+    <h1>速记收件箱</h1>
     <button class="icon-btn" onclick="loadAll()" title="刷新" aria-label="刷新">__I_REFRESH__</button>
   </header>
   <main>
     <div class="ai-bar">
-      <span class="t">让 AI 读收件箱、给出「放哪个实验哪一步」的建议，你再确认。用你正开着的 Claude Code / Codex（走订阅，不花 token）。</span>
-      <button onclick="toggleAiPanel()">__I_SPARK__ 让 AI 归档</button>
+      <span class="t">这里回看历史速记、听录音、看照片。归档交给你开着的 Claude Code / Codex：它先把计划列给你看，你确认后直接写进实验（走订阅，不花 token）。</span>
+      <button onclick="toggleAiPanel()">__I_SPARK__ AI 归档指令</button>
     </div>
     <div class="ai-panel" id="aiPanel">
-      <div class="small" style="margin-bottom:8px">把下面这段话复制，粘贴进你的 Claude Code / Codex 对话里发送即可。它会读收件箱、看图片、提交建议（不直接写入），完成后刷新这一页逐条确认。</div>
+      <div class="small" style="margin-bottom:8px">复制下面这段，粘贴进你的 Claude Code / Codex 对话里发送。它会读速记、看图片，先把「哪条写到哪个实验哪一步」的完整计划发给你，等你确认后才直接写入。</div>
       <pre id="aiPrompt"></pre>
       <div class="actions" style="margin-top:10px">
         <button class="green" onclick="copyPrompt()">复制指令</button>
@@ -736,21 +672,37 @@ _INBOX_BODY = """
         <span class="small" id="copyHint"></span>
       </div>
     </div>
-    <div id="topHint">待归档的速记在这里。选好实验和步骤后「写入记录」；AI 归档后这里会显示它的建议供你确认。</div>
+    <div class="chips" id="chips">
+      <button class="chip active" data-f="pending" onclick="setFilter('pending')">待归档</button>
+      <button class="chip" data-f="filed" onclick="setFilter('filed')">已归档</button>
+      <button class="chip" data-f="all" onclick="setFilter('all')">全部</button>
+    </div>
     <div id="entries"></div>
   </main>
 __NAV__
 <script>
 __ICON_JS__
-const AI_PROMPT = `帮我归档 ELN 速记收件箱。ELN 本地接口在 http://127.0.0.1:8600 （本机免密）。
+const AI_PROMPT = `帮我把 ELN 速记收件箱归档进实验记录。本地接口 http://127.0.0.1:8600（本机免密）。
 
-1. GET /api/inbox?status=pending 取待归档条目（含 id、text、image_urls、hinted_experiment_id）。
-2. GET /api/experiment_summaries?status=active,needs_wrapup 看有哪些实验；对相关实验 GET /api/experiments/{id}/steps 看步骤（id、step_index、title、description、fields 的 key/label/type/options）。
-3. 每条待归档：有图片就读 image_urls（形如 http://127.0.0.1:8600/photos/...）看内容；判断属于哪个实验哪一步（hinted_experiment_id 有值优先）；写一段规范中文备注（忠实原意别编造）；只有明确提到数值才填字段（匹配该步骤 field 的 key）。
-   如果明显不是任何进行中/收尾中的实验，不要硬塞进旧实验；请先把它标成“建议新建实验”，在 reason 里给出建议实验名和建议步骤。只有我明确确认后，才调用 POST /api/experiments 新建实验。
-4. 提交建议（不要写入记录）：POST /api/inbox/{id}/proposal，body 示例：
-{"experiment_id":3,"step_id":12,"note":"加样时观察到轻微浑浊","fields":[{"key":"vol","value":"12","reason":"用户说加了12微升"}],"reason":"提到加样和浑浊，对应第1步"}
-5. 全部提交后告诉我数量。不要调用 /apply，也不要未经确认新建实验 —— 我会逐条确认后再让你写入。`;
+重要：先把完整计划列给我看，等我明确说“确认”后，你再真正写入。别未经确认就写。
+
+一、读取
+1. GET /api/inbox?status=pending —— 待归档速记（id、text、image_urls、audio_url、hinted_experiment_id、created_at）。有图片就打开 image_urls 看清内容；只有 audio_url 而 text 为空，说明语音还没转写，提醒我别瞎猜。
+2. GET /api/experiment_summaries —— 现有实验（id、name、进度）。对可能相关的实验 GET /api/experiments/{id}/steps 看每一步：id、step_index、title、description、fields（每个 key/label/type/options）、values（当前已填值）。
+
+二、整理并把计划发给我（先别写）
+逐条速记：把关键信息提炼出来（去掉口语的重复啰嗦，忠实原意、不要编造），判断它该写到哪个实验、哪一步、哪些字段。数值只有我明确说了才填，带单位只填数字。
+- 一条速记可以拆开写到多个步骤/字段。
+- 那一步没有合适的字段时，可以给这步新增一个字段来装，或写进该步备注。
+- 明显不属于任何现有实验的，提议新建实验（给出实验名和步骤结构，参考仓库里的 ELN_Protocol_Format.md / protocol_templates/）。
+整理成一份清单：每条速记 → 目标实验/步骤 → 要写入的值 / 要新增的字段 / 要新建的实验。发给我，然后停下等我确认。
+
+三、我确认后再写（用颗粒接口直接写；写前记下旧值，方便我让你撤销）
+- 写某步：GET /api/steps/{step_id} 拿当前 values 和 fields → 把要写的值并进去 → PATCH /api/steps/{step_id}，body {"values_json":"<整个 values 的 JSON 字符串>"}。要加字段就同时传 "fields_json"（在原 fields 数组后追加 {"key","label","type"，需要时"options"}），再把值填进 values 对应 key。
+- 新建实验：POST /api/experiments，body {"name":"...","protocol_json":"<ProtocolDefinition 的 JSON 字符串>"}，建好后按上面往它的步骤写。
+- 每条写完：POST /api/inbox/{id}/filed，body {"experiment_id":3,"step_id":12,"summary":"一句话说写了什么"} —— 把它移出待办并留档。
+
+四、全部写完，逐条告诉我写到了哪、加了什么字段、建了什么实验。哪条放错了我会让你改或撤销。`;
 function toggleAiPanel(){
   const p = document.getElementById("aiPanel");
   const open = !p.classList.contains("open");
@@ -762,8 +714,7 @@ async function copyPrompt(){
   try { await navigator.clipboard.writeText(AI_PROMPT); h.textContent = "已复制，去粘贴给 AI"; h.style.color = "var(--pos)"; }
   catch { const r = document.createRange(); r.selectNode(document.getElementById("aiPrompt")); getSelection().removeAllRanges(); getSelection().addRange(r); h.textContent = "已选中，按 Ctrl+C 复制"; }
 }
-let experiments = [];
-const stepsCache = {};
+let filter = "pending";
 
 function esc(v){ return String(v ?? "").replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
 async function api(path, opts={}){
@@ -772,123 +723,81 @@ async function api(path, opts={}){
   return res.status === 204 ? null : await res.json();
 }
 
-async function ensureSteps(expId){
-  if(!expId) return [];
-  if(stepsCache[expId]) return stepsCache[expId];
-  try { stepsCache[expId] = await api(`/api/experiments/${expId}/steps`); }
-  catch { stepsCache[expId] = []; }
-  return stepsCache[expId];
+function setFilter(f){
+  filter = f;
+  for(const b of document.querySelectorAll("#chips .chip")){ b.classList.toggle("active", b.dataset.f === f); }
+  loadAll();
 }
 
 async function loadAll(){
-  try { experiments = await api("/api/experiment_summaries"); } catch { experiments = []; }
   let items = [];
-  try { items = await api("/api/inbox?status=pending"); } catch {}
+  try { items = await api("/api/inbox?status=" + encodeURIComponent(filter)); } catch {}
   const root = document.getElementById("entries");
-  if(!items.length){ root.innerHTML = '<div class="empty">收件箱空了，都归档好了。</div>'; return; }
+  if(!items.length){
+    const msg = filter === "pending" ? "没有待归档的速记，都处理好了。"
+              : filter === "filed" ? "还没有已归档的速记。" : "还没有速记。";
+    root.innerHTML = '<div class="empty">' + msg + '</div>';
+    return;
+  }
   root.innerHTML = "";
-  for(const it of items){ root.appendChild(await renderEntry(it)); }
+  for(const it of items){ root.appendChild(renderEntry(it)); }
 }
 
-function expOptions(sel){
-  return '<option value="">选择实验…</option>' + experiments.map(e =>
-    `<option value="${e.id}" ${String(sel)===String(e.id)?"selected":""}>${esc(e.name)}</option>`).join("");
+function statusBadge(s){
+  if(s === "filed") return '<span class="badge filed">已归档</span>';
+  if(s === "dismissed") return '<span class="badge dismissed">已忽略</span>';
+  return '<span class="badge pending">待归档</span>';
 }
 
-async function renderEntry(it){
+function renderEntry(it){
   const el = document.createElement("div");
   el.className = "entry"; el.id = "entry-"+it.id;
   const t = new Date(it.created_at);
   const stamp = t.toLocaleString();
   const media = (it.image_urls||[]).map(u => `<a href="${esc(u)}" target="_blank"><img src="${esc(u)}"></a>`).join("");
   const audio = it.audio_url ? `<audio controls preload="none" src="${esc(it.audio_url)}"></audio>` : "";
-  const prop = it.proposal;
-  const preExp = (prop && prop.experiment_id) || it.hinted_experiment_id || "";
-  const preStep = (prop && prop.step_id) || "";
-  const preNote = prop && prop.note != null ? prop.note : it.text;
+  const bodyText = it.text ? esc(it.text) : (it.audio_url ? "<i>语音，尚未转写</i>" : "<i>（无文字）</i>");
 
-  let sug = "";
-  if(prop){
-    const en = experiments.find(e=>String(e.id)===String(prop.experiment_id));
-    const fieldsTxt = (prop.fields||[]).map(f=>`${esc(f.key)}=${esc(f.value)}`).join("，");
-    sug = `<div class="ai-sug"><span class="lbl">${svgIcon("sparkle",15)}AI 建议</span>：放到 <b>${en?esc(en.name):("实验"+prop.experiment_id)}</b>`
-        + (prop.step_id?` · 步骤#${prop.step_id}`:"")
-        + (fieldsTxt?` · 字段 ${fieldsTxt}`:"")
-        + (prop.reason?`<div class="rs">依据：${esc(prop.reason)}</div>`:"")
-        + `</div>`;
+  let filedTo = "";
+  if(it.status === "filed"){
+    const p = it.proposal || {};
+    const where = it.filed_experiment_id
+      ? `实验#${it.filed_experiment_id}${it.filed_step_id?(" · 步骤#"+it.filed_step_id):""}` : "";
+    const sum = p.summary ? esc(p.summary) : "";
+    if(where || sum){
+      filedTo = `<div class="filed-to"><span class="lbl">${svgIcon("check",14)}已写入</span>`
+        + (where?` ${where}`:"") + (sum?`<div class="rs">${sum}</div>`:"") + `</div>`;
+    }
   }
 
   el.innerHTML = `
-    <div class="etime">${stamp}${it.hinted_experiment_id?" · 已标实验":""}</div>
-    <details class="raw-edit">
-      <summary>识别文字（可改）</summary>
-      <textarea class="etext-edit" id="raw-${it.id}" placeholder="识别文字">${esc(it.text||"")}</textarea>
-      <button class="secondary" onclick="saveEntryText(${it.id})">保存识别文字</button>
-    </details>
+    <div class="etime">${stamp} · ${statusBadge(it.status)}${it.hinted_experiment_id?" · 已标实验":""}</div>
+    <div class="etext">${bodyText}</div>
     <div class="emedia">${media}</div>
     ${audio}
-    ${sug}
-    <textarea class="etext-edit" id="note-${it.id}" oninput="this.dataset.touched='1'" placeholder="写入记录的备注（可改）">${esc(preNote||"")}</textarea>
-    <div class="file-row">
-      <select id="exp-${it.id}" onchange="onExpChange(${it.id})">${expOptions(preExp)}</select>
-      <select id="step-${it.id}"><option value="">选择步骤…</option></select>
-    </div>
-    <div class="entry-actions">
-      <button class="green" onclick="applyEntry(${it.id})">${svgIcon("check",17)}写入记录</button>
-      <button class="secondary" onclick="dismissEntry(${it.id})">忽略</button>
-      <button class="danger-ghost" onclick="deleteEntry(${it.id})">${svgIcon("trash",16)}删除</button>
+    ${filedTo}
+    <details class="raw-edit">
+      <summary>修正识别文字</summary>
+      <textarea id="raw-${it.id}" placeholder="识别文字">${esc(it.text||"")}</textarea>
+      <button class="secondary" onclick="saveEntryText(${it.id})">保存</button>
       <span class="small" id="es-${it.id}"></span>
+    </details>
+    <div class="entry-actions">
+      <button class="danger-ghost" onclick="deleteEntry(${it.id})">${svgIcon("trash",16)}删除</button>
     </div>`;
-
-  // populate steps if an experiment is preselected
-  if(preExp){ setTimeout(()=>fillSteps(it.id, preExp, preStep), 0); }
   return el;
 }
 
-async function onExpChange(id){
-  const expId = document.getElementById("exp-"+id).value;
-  await fillSteps(id, expId, "");
-}
-async function fillSteps(id, expId, preStep){
-  const sel = document.getElementById("step-"+id);
-  if(!sel) return;
-  if(!expId){ sel.innerHTML = '<option value="">选择步骤…</option>'; return; }
-  const steps = await ensureSteps(expId);
-  sel.innerHTML = '<option value="">选择步骤…</option>' + steps.map(s =>
-    `<option value="${s.id}" ${String(preStep)===String(s.id)?"selected":""}>第${s.step_index+1}步 · ${esc(s.title)}${s.completed_at?" ✓":""}</option>`).join("");
-}
-
-async function applyEntry(id){
-  const stepId = document.getElementById("step-"+id).value;
-  const st = document.getElementById("es-"+id);
-  if(!stepId){ st.textContent = "请先选步骤"; return; }
-  const note = document.getElementById("note-"+id).value;
-  const entry = await api("/api/inbox/"+id);
-  const fields = entry.proposal ? entry.proposal.fields : null;
-  st.textContent = "写入中…";
-  try {
-    await api(`/api/inbox/${id}/apply`, {method:"POST", body: JSON.stringify({step_id: Number(stepId), note, fields})});
-    const el = document.getElementById("entry-"+id);
-    if(el){ el.style.opacity=".5"; el.querySelector(".entry-actions").innerHTML = '<span class="small" style="color:var(--green);font-weight:700">✓ 已写入记录</span>'; }
-    setTimeout(loadAll, 900);
-  } catch(e){ st.textContent = "失败："+(e.message||e); }
-}
 async function saveEntryText(id){
   const st = document.getElementById("es-"+id);
   try {
     const edited = document.getElementById("raw-"+id).value;
     st.textContent = "保存中…";
     await api(`/api/inbox/${id}`, {method:"PATCH", body: JSON.stringify({text: edited})});
-    const note = document.getElementById("note-"+id);
-    if(note && !note.dataset.touched){ note.value = edited; }
     st.textContent = "已保存";
   } catch(e){
     st.textContent = "保存失败："+(e.message||e);
   }
-}
-async function dismissEntry(id){
-  await api(`/api/inbox/${id}/dismiss`, {method:"POST", body:"{}"});
-  loadAll();
 }
 async function deleteEntry(id){
   if(!confirm("删除这条速记？")) return;
@@ -897,7 +806,7 @@ async function deleteEntry(id){
 }
 
 loadAll();
-setInterval(loadAll, 12000);
+setInterval(loadAll, 15000);
 </script>
 </body>
 </html>
@@ -911,7 +820,7 @@ def inbox_page(request: Request):
         "__I_BACK__": ("chevron-left", 18), "__I_REFRESH__": ("refresh", 18),
         "__I_SPARK__": ("sparkle", 16),
     })
-    body = body.replace("__NAV__", _bottom_nav("inbox", _flet_home_url(request)))
+    body = body.replace("__NAV__", _bottom_nav("more", _flet_home_url(request)))
     return _html_response(web_ui.page_head("收件箱 · ELN", _INBOX_CSS) + body,
                           headers={"Cache-Control": "no-store, max-age=0"})
 
@@ -937,6 +846,7 @@ _HUB_CSS = _NAV_CSS + """
 @app.get("/more", response_class=HTMLResponse)
 def more_page(request: Request):
     cards = [
+        ("inbox", "inbox", "速记收件箱", "回看历史速记、听录音、看照片", "/inbox"),
         ("protocols", "flask", "协议库", "新建实验、导入或编辑协议", "/protocols"),
         ("history", "note", "历史记录", "查看以往实验和报告", "/history"),
         ("settings", "settings", "设置", "AI 归档、访问信息", "/settings"),
@@ -1211,7 +1121,7 @@ _HELP_HTML = """
         <div class="help-body">实验结束时可登记要冻存/保存的样品，一行一个，格式：<br/><code>样品名 | 管型 | 备注</code>，例如：<br/><code>PCR 产物 | 1.5mL EP管 | sample A</code><br/>也可以只写样品名。之后选 Box、点格子完成位置登记。</div>
       </details>
       <details class="help"><summary>AI 归档怎么用</summary>
-        <div class="help-body">上面填好模型服务和密钥后：在实验页的语音速记里点「AI 整理」，或（下一步会做）在电脑上用 Claude Code / Codex 读收件箱。AI 只会给<b>建议</b>，最终由你在收件箱/草稿里确认才真正写入记录，数字类字段请核对。</div>
+        <div class="help-body">推荐用电脑上开着的 Claude Code / Codex（走订阅、不花 token、能看图）：打开 更多 → 速记收件箱，点「AI 归档指令」复制那段话发给它。它会读速记、<b>先把归档计划列给你看</b>，你确认后再直接写进实验（能分散写多处、缺字段会补、必要时新建实验）。上面这份模型服务/密钥是给实验页「AI 整理」按钮用的，可不填。</div>
       </details>
     </section>
 """
@@ -3515,6 +3425,13 @@ class InboxApply(BaseModel):
     attach_images: bool = True
 
 
+class InboxFiled(BaseModel):
+    # agent already wrote the data directly; just record where it landed
+    experiment_id: Optional[int] = None
+    step_id: Optional[int] = None
+    summary: str = ""
+
+
 def _inbox_to_dict(entry: dict) -> dict:
     d = dict(entry)
     d["image_urls"] = ["/photos/" + str(p).replace("\\", "/") for p in d.get("image_paths", [])]
@@ -3649,6 +3566,27 @@ def apply_inbox(entry_id: int, body: InboxApply):
         filed_experiment_id=exp_id, filed_step_id=step_id, filed_at=db_ops._now(),
     )
     return {"ok": True, "experiment_id": exp_id, "step_id": step_id}
+
+
+@app.post("/api/inbox/{entry_id}/filed")
+def mark_inbox_filed(entry_id: int, body: InboxFiled):
+    """Mark a capture as已归档 after an agent wrote it directly via the granular
+    step/experiment APIs. Records where it went + a short summary for the audit view.
+    Does not write experiment data itself — that is the agent's job."""
+    entry = db_ops.get_inbox_entry(entry_id)
+    if not entry:
+        raise HTTPException(404, "Inbox entry not found")
+    record = {"summary": (body.summary or "").strip()}
+    if body.experiment_id is not None:
+        record["experiment_id"] = body.experiment_id
+    if body.step_id is not None:
+        record["step_id"] = body.step_id
+    db_ops.update_inbox_entry(
+        entry_id, status="filed", proposal=record,
+        filed_experiment_id=body.experiment_id, filed_step_id=body.step_id,
+        filed_at=db_ops._now(),
+    )
+    return {"ok": True}
 
 
 @app.post("/api/inbox/{entry_id}/dismiss")
