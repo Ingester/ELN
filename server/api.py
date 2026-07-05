@@ -635,6 +635,11 @@ _INBOX_CSS = _NAV_CSS + """
     .entry .emedia a { width:88px; height:88px; border-radius:10px; overflow:hidden; border:1px solid var(--line); display:block; }
     .entry .emedia img { width:100%; height:100%; object-fit:cover; }
     .entry audio { width:100%; max-width:360px; margin-top:6px; }
+    .raw-edit { margin:8px 0; background:var(--inset); border:1px solid var(--line);
+      border-radius:10px; padding:8px 10px; }
+    .raw-edit summary { cursor:pointer; color:var(--muted); font-size:13px; }
+    .raw-edit textarea { min-height:96px; }
+    .raw-edit button { margin-top:8px; }
     .ai-sug { border:1px solid var(--clay-line); background:var(--clay-soft); border-radius:12px; padding:10px 12px; margin:10px 0; color:var(--clay-ink); font-size:13.5px; line-height:1.5; }
     .ai-sug .lbl { display:inline-flex; align-items:center; gap:4px; font-weight:500; }
     .ai-sug .lbl svg { stroke-width:1.75; }
@@ -760,11 +765,15 @@ async function renderEntry(it){
 
   el.innerHTML = `
     <div class="etime">${stamp}${it.hinted_experiment_id?" · 已标实验":""}</div>
-    <div class="etext">${it.text?esc(it.text):'<span class="small">（无文字）</span>'}</div>
+    <details class="raw-edit">
+      <summary>识别文字（可改）</summary>
+      <textarea class="etext-edit" id="raw-${it.id}" placeholder="识别文字">${esc(it.text||"")}</textarea>
+      <button class="secondary" onclick="saveEntryText(${it.id})">保存识别文字</button>
+    </details>
     <div class="emedia">${media}</div>
     ${audio}
     ${sug}
-    <textarea class="etext-edit" id="note-${it.id}" placeholder="写入记录的备注（可改）">${esc(preNote||"")}</textarea>
+    <textarea class="etext-edit" id="note-${it.id}" oninput="this.dataset.touched='1'" placeholder="写入记录的备注（可改）">${esc(preNote||"")}</textarea>
     <div class="file-row">
       <select id="exp-${it.id}" onchange="onExpChange(${it.id})">${expOptions(preExp)}</select>
       <select id="step-${it.id}"><option value="">选择步骤…</option></select>
@@ -808,6 +817,19 @@ async function applyEntry(id){
     if(el){ el.style.opacity=".5"; el.querySelector(".entry-actions").innerHTML = '<span class="small" style="color:var(--green);font-weight:700">✓ 已写入记录</span>'; }
     setTimeout(loadAll, 900);
   } catch(e){ st.textContent = "失败："+(e.message||e); }
+}
+async function saveEntryText(id){
+  const st = document.getElementById("es-"+id);
+  try {
+    const edited = document.getElementById("raw-"+id).value;
+    st.textContent = "保存中…";
+    await api(`/api/inbox/${id}`, {method:"PATCH", body: JSON.stringify({text: edited})});
+    const note = document.getElementById("note-"+id);
+    if(note && !note.dataset.touched){ note.value = edited; }
+    st.textContent = "已保存";
+  } catch(e){
+    st.textContent = "保存失败："+(e.message||e);
+  }
 }
 async function dismissEntry(id){
   await api(`/api/inbox/${id}/dismiss`, {method:"POST", body:"{}"});
