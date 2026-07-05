@@ -1424,7 +1424,7 @@ _RUNNER_CSS = """
     .timer { border:1px solid #f6ddba; background:var(--inset); border-radius:var(--radius); padding:14px; margin-top:14px; }
     .timer-display { font-size:40px; font-weight:800; color:var(--accent-strong); font-variant-numeric:tabular-nums; line-height:1.1; }
     .timer-edit { display:flex; gap:8px; align-items:center; margin-top:6px; }
-    .timer-edit input { width:110px; }
+    .timer-edit input { width:74px; }
     .timer.over { background:var(--neg-soft); border-color:#e8cabf; }
     .timer.over .timer-display { color:var(--red); }
     .timer .actions { margin-top:10px; }
@@ -1837,6 +1837,8 @@ function timerMinutes(seconds){
   const n = (seconds || 0) / 60;
   return Number.isInteger(n) ? String(n) : String(Math.round(n * 10) / 10);
 }
+function timerHours(seconds){ return String(Math.floor((seconds || 0) / 3600)); }
+function timerMins(seconds){ return String(Math.round(((seconds || 0) % 3600) / 60)); }
 
 function currentStepIndex(){
   const raw = localStorage.getItem(stepIndexKey(selectedExperiment));
@@ -2061,10 +2063,12 @@ function renderSteps(items){
   const timerBlock = totalSeconds > 0 ? `
     <div class="timer" id="timer-box-${step.id}">
       <div class="small">步骤计时 · 电脑端负责响铃</div>
-      <div class="timer-display" id="timer-display-${step.id}">${fmt(totalSeconds)}</div>
+      <div class="timer-display" id="timer-display-${step.id}">${fmtHMS(totalSeconds)}</div>
       <div class="field timer-edit">
-        <input type="number" min="0" step="0.1" value="${timerMinutes(totalSeconds)}" onchange="saveTimerOverride(${step.experiment_id}, ${step.id}, this.value)" ${step.completed_at ? "disabled" : ""} />
-        <span class="small">分钟</span>
+        <input type="number" min="0" step="1" id="th-${step.id}" value="${timerHours(totalSeconds)}" onchange="saveTimerHM(${step.experiment_id}, ${step.id})" ${step.completed_at ? "disabled" : ""} />
+        <span class="small">时</span>
+        <input type="number" min="0" step="1" id="tm-${step.id}" value="${timerMins(totalSeconds)}" onchange="saveTimerHM(${step.experiment_id}, ${step.id})" ${step.completed_at ? "disabled" : ""} />
+        <span class="small">分</span>
       </div>
       <div class="actions">
         <button onclick="startLocalTimer(${step.experiment_id}, ${step.id}, ${totalSeconds})" ${step.completed_at ? "disabled" : ""}>开始</button>
@@ -2283,7 +2287,15 @@ function renderInline(text){
 function saveTimerOverride(expId, stepId, minutes){
   const value = parseFloat(minutes);
   if(Number.isNaN(value) || value < 0){ status(stepId, "计时器请输入有效分钟数"); return; }
-  const seconds = Math.max(0, Math.round(value * 60));
+  applyTimerSeconds(expId, stepId, Math.max(0, Math.round(value * 60)));
+}
+function saveTimerHM(expId, stepId){
+  const h = parseFloat(document.getElementById("th-" + stepId).value) || 0;
+  const m = parseFloat(document.getElementById("tm-" + stepId).value) || 0;
+  if(h < 0 || m < 0){ status(stepId, "计时请输入有效的时和分"); return; }
+  applyTimerSeconds(expId, stepId, Math.max(0, Math.round(h * 3600 + m * 60)));
+}
+function applyTimerSeconds(expId, stepId, seconds){
   localStorage.setItem(timerKey(stepId), String(seconds));
   resetLocalTimer(expId, stepId, seconds, "override");
   enqueue({type:"patchStep", stepId, payload: patchPayload(stepId)});
@@ -2536,7 +2548,7 @@ function refreshTimers(){
     if(!display || !box) continue;
     if(current.status === "overtime" || (current.status === "running" && current.remaining <= 0)){
       const overtime = Math.max(0, Math.floor(current.overtime ?? Math.abs(current.remaining || 0)));
-      display.textContent = "+" + fmt(overtime);
+      display.textContent = "+" + fmtHMS(overtime);
       box.classList.add("over");
       if(text) text.textContent = "时间到。电脑端会响铃；当前页面同步显示。";
       if(timers[step.id]?.status !== "overtime"){
@@ -2561,7 +2573,7 @@ function refreshTimers(){
         setTimers(timers);
       }
     } else {
-      display.textContent = fmt(current.remaining ?? totalSeconds);
+      display.textContent = fmtHMS(current.remaining ?? totalSeconds);
       box.classList.remove("over");
       if(text) text.textContent = current.status === "running"
         ? "计时中"
