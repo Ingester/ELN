@@ -1357,7 +1357,12 @@ _RUNNER_CSS = """
     .bc-badge.s-active { background:#f6e8df; color:#8a5a44; }
     .bc-badge.s-needs_wrapup { background:#fdf1d6; color:#8a6d1e; }
     .bc-foot { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:8px; }
+    .bc-foot-l { display:flex; align-items:center; gap:8px; min-width:0; }
     .bc-meta { font-size:12.5px; color:var(--muted); }
+    .bc-timer { display:inline-flex; align-items:center; gap:4px; font-size:12px; font-weight:700;
+      font-variant-numeric:tabular-nums; color:#8a6d1e; background:#fdf1d6; border-radius:999px; padding:2px 8px; white-space:nowrap; }
+    .bc-timer.over { color:#fff; background:#a63a24; }
+    .bc-timer svg { width:12px; height:12px; stroke:currentColor; fill:none; stroke-width:2; }
     .bc-abandon { min-height:0; padding:2px 4px; background:none; box-shadow:none; border:0;
       color:var(--faint); font-size:12px; font-weight:500; cursor:pointer; }
     .bc-abandon:hover { color:#c0503a; text-decoration:underline; }
@@ -1625,11 +1630,16 @@ function setHeaderMode(v){
   document.getElementById("board").style.display = board ? "block" : "none";
   document.getElementById("steps").style.display = board ? "none" : "block";
   document.getElementById("queueInfo").style.display = board ? "none" : "block";
+  const dock = document.getElementById("elnDock");   // floating timer dock: only inside an experiment
+  if(dock) dock.style.display = board ? "none" : "flex";
 }
 
-function showBoard(){
+async function showBoard(){
   setHeaderMode("board");
   renderBoard(experiments);
+  await loadBoardTimers();
+  boardTimerKeys = Object.keys(boardTimers).sort().join(",");
+  if(view === "board") renderBoard(experiments);
 }
 
 function renderBoard(exps){
@@ -1642,15 +1652,69 @@ function renderBoard(exps){
     const total = e.total_steps || 0, done = e.completed_steps || 0;
     const pct = total ? Math.round(done / total * 100) : 0;
     const label = STATUS_LABEL[e.status] || e.status || "";
+    const timerChip = boardTimers[String(e.id)]
+      ? `<span class="bc-timer" id="bctimer-${e.id}">${svgIcon("timer",12)}<span class="tv"></span></span>` : "";
     return `<div class="board-card" onclick="enterExperiment('${e.id}')">
       <div class="bc-top"><span class="bc-name">${esc(e.name)}</span><span class="bc-badge s-${esc(e.status)}">${esc(label)}</span></div>
       <div class="progress"><div style="width:${pct}%"></div></div>
       <div class="bc-foot">
-        <span class="bc-meta">${done}/${total} 步 · ${pct}%</span>
+        <div class="bc-foot-l"><span class="bc-meta">${done}/${total} 步 · ${pct}%</span>${timerChip}</div>
         <button class="bc-abandon" onclick="event.stopPropagation(); abandonExperiment('${e.id}', ${esc(JSON.stringify(e.name))})">放弃</button>
       </div>
     </div>`;
   }).join("");
+  tickBoardTimers();
+}
+
+let boardTimers = {};
+let boardTimerKeys = "";
+
+async function loadBoardTimers(){
+  try {
+    const list = await api("/api/timers/active");
+    const now = Date.now();
+    const map = {};
+    for(const t of list){
+      const updated = parseServerTime(t.updated_at);
+      const rec = {
+        status: t.status,
+        endAt: t.status === "running" ? updated + (t.remaining_seconds || 0) * 1000 : null,
+        overBase: t.overtime_seconds || 0,
+        overSince: updated,
+      };
+      const key = String(t.experiment_id);
+      const cur = map[key];
+      // prefer a running timer (soonest end) over an overtime one
+      if(!cur || (rec.status === "running" && (cur.status !== "running" || rec.endAt < cur.endAt))){
+        map[key] = rec;
+      }
+    }
+    boardTimers = map;
+  } catch {}
+}
+
+function tickBoardTimers(){
+  if(view !== "board") return;
+  const now = Date.now();
+  for(const key in boardTimers){
+    const el = document.getElementById("bctimer-" + key);
+    if(!el) continue;
+    const t = boardTimers[key];
+    let over = false, secs = 0;
+    if(t.status === "running" && t.endAt){ secs = Math.round((t.endAt - now) / 1000); if(secs <= 0){ over = true; secs = -secs; } }
+    else { over = true; secs = t.overBase + Math.round((now - t.overSince) / 1000); }
+    el.classList.toggle("over", over);
+    const tv = el.querySelector(".tv");
+    if(tv) tv.textContent = (over ? "+" : "") + fmt(secs);
+  }
+}
+
+async function pollBoardTimers(){
+  if(view !== "board") return;
+  await loadBoardTimers();
+  const keys = Object.keys(boardTimers).sort().join(",");
+  if(keys !== boardTimerKeys){ boardTimerKeys = keys; if(view === "board") renderBoard(experiments); }
+  else { tickBoardTimers(); }
 }
 
 async function enterExperiment(id){
@@ -3066,6 +3130,8 @@ setInterval(async () => {
 window.addEventListener("online", syncNow);
 setInterval(syncNow, 15000);
 setInterval(refreshTimers, 1000);
+setInterval(tickBoardTimers, 1000);
+setInterval(pollBoardTimers, 5000);
 function applyBackTarget(){
   const link = document.getElementById("backToFlet");
   if(!link) return;
