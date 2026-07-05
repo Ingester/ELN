@@ -419,11 +419,19 @@ _CAPTURE_CSS = _NAV_CSS + """
     .archive-row button { flex:1; min-height:50px; font-size:15.5px; }
     .pending-head { display:flex; justify-content:space-between; align-items:center; margin:22px 2px 8px; }
     .pending-head h2 { margin:0; font-size:12px; color:var(--faint); text-transform:none; letter-spacing:.04em; }
+    .pending-head .right { display:flex; gap:10px; align-items:center; }
     .pending-item { display:flex; gap:10px; background:var(--inset); border:1px solid var(--line);
-      border-radius:12px; padding:10px; margin-bottom:8px; align-items:center; }
+      border-radius:12px; padding:10px; margin-bottom:8px; align-items:flex-start; }
     .pending-item .thumb { width:48px; height:48px; flex:0 0 auto; }
     .pending-item .pt { flex:1; min-width:0; font-size:14px; overflow-wrap:anywhere; }
     .pending-item .pm { font-size:12px; color:var(--muted); margin-top:2px; }
+    .pending-item .pa { display:flex; gap:6px; flex:0 0 auto; }
+    .pending-item .icon-btn { min-width:34px; min-height:34px; padding:6px; background:#fff; }
+    .pending-edit { display:none; margin-top:8px; }
+    .pending-edit.open { display:block; }
+    .pending-edit textarea { min-height:92px; font-size:14px; background:#fff; }
+    .pending-edit .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+    .pending-edit button { min-height:36px; padding:6px 12px; font-size:13.5px; }
 """
 
 _CAPTURE_BODY = """
@@ -456,7 +464,9 @@ _CAPTURE_BODY = """
 
     <div class="pending-head">
       <h2>待归档</h2>
-      <a class="edit-link" href="/inbox">全部 __I_ARR__</a>
+      <div class="right">
+        <a class="edit-link" href="/inbox">AI 整理 / 确认 __I_ARR__</a>
+      </div>
     </div>
     <div id="pendingList"></div>
   </main>
@@ -592,10 +602,54 @@ async function loadPending(){
         ? `<span class="thumb"><img src="${esc(it.image_urls[0])}"></span>`
         : `<span class="thumb ph">${svgIcon(it.audio_url && !it.text ? "audio" : "note", 20)}</span>`;
       const t = new Date(it.created_at); const hh = String(t.getHours()).padStart(2,"0")+":"+String(t.getMinutes()).padStart(2,"0");
-      const body = it.text ? esc(it.text) : (it.audio_url ? "语音" : "图片");
-      return `<div class="pending-item">${thumb}<div class="pt">${body}<div class="pm">${hh}${it.hinted_experiment_id?" · 已标实验":""}</div></div></div>`;
+      const body = it.text ? esc(it.text) : (it.audio_url ? "语音待识别或未识别到文字" : "图片");
+      const raw = esc(it.text || "");
+      return `<div class="pending-item" id="pending-${it.id}">
+        ${thumb}
+        <div class="pt">
+          <div id="pending-text-${it.id}">${body}</div>
+          <div class="pm">${hh}${it.hinted_experiment_id?" · 已标实验":""}</div>
+          <div class="pending-edit" id="pending-edit-${it.id}">
+            <textarea id="pending-raw-${it.id}" placeholder="修改语音识别文字">${raw}</textarea>
+            <div class="row">
+              <button class="green" onclick="savePendingText(${it.id})">保存</button>
+              <button class="secondary" onclick="closePendingEdit(${it.id})">取消</button>
+              <span class="small" id="pending-status-${it.id}"></span>
+            </div>
+          </div>
+        </div>
+        <div class="pa"><button class="icon-btn" onclick="openPendingEdit(${it.id})" title="修改识别文字" aria-label="修改识别文字">${svgIcon("pencil",15)}</button></div>
+      </div>`;
     }).join("");
   } catch {}
+}
+
+function openPendingEdit(id){
+  const panel = document.getElementById("pending-edit-"+id);
+  const ta = document.getElementById("pending-raw-"+id);
+  if(panel) panel.classList.add("open");
+  if(ta) setTimeout(() => { ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length; }, 30);
+}
+function closePendingEdit(id){
+  const panel = document.getElementById("pending-edit-"+id);
+  const st = document.getElementById("pending-status-"+id);
+  if(panel) panel.classList.remove("open");
+  if(st) st.textContent = "";
+}
+async function savePendingText(id){
+  const ta = document.getElementById("pending-raw-"+id);
+  const st = document.getElementById("pending-status-"+id);
+  if(!ta) return;
+  try {
+    if(st) st.textContent = "保存中…";
+    const updated = await api(`/api/inbox/${id}`, {method:"PATCH", body: JSON.stringify({text: ta.value})});
+    const textNode = document.getElementById("pending-text-"+id);
+    if(textNode) textNode.textContent = updated.text || (updated.audio_url ? "语音待识别或未识别到文字" : "图片");
+    if(st) st.textContent = "已保存";
+    setTimeout(() => closePendingEdit(id), 700);
+  } catch(e){
+    if(st) st.textContent = "保存失败：" + (e.message || e);
+  }
 }
 
 loadExperiments();
@@ -693,9 +747,10 @@ const AI_PROMPT = `帮我归档 ELN 速记收件箱。ELN 本地接口在 http:/
 1. GET /api/inbox?status=pending 取待归档条目（含 id、text、image_urls、hinted_experiment_id）。
 2. GET /api/experiment_summaries?status=active,needs_wrapup 看有哪些实验；对相关实验 GET /api/experiments/{id}/steps 看步骤（id、step_index、title、description、fields 的 key/label/type/options）。
 3. 每条待归档：有图片就读 image_urls（形如 http://127.0.0.1:8600/photos/...）看内容；判断属于哪个实验哪一步（hinted_experiment_id 有值优先）；写一段规范中文备注（忠实原意别编造）；只有明确提到数值才填字段（匹配该步骤 field 的 key）。
+   如果明显不是任何进行中/收尾中的实验，不要硬塞进旧实验；请先把它标成“建议新建实验”，在 reason 里给出建议实验名和建议步骤。只有我明确确认后，才调用 POST /api/experiments 新建实验。
 4. 提交建议（不要写入记录）：POST /api/inbox/{id}/proposal，body 示例：
 {"experiment_id":3,"step_id":12,"note":"加样时观察到轻微浑浊","fields":[{"key":"vol","value":"12","reason":"用户说加了12微升"}],"reason":"提到加样和浑浊，对应第1步"}
-5. 全部提交后告诉我数量。不要调用 /apply —— 我会在浏览器 /inbox 里逐条确认。`;
+5. 全部提交后告诉我数量。不要调用 /apply，也不要未经确认新建实验 —— 我会逐条确认后再让你写入。`;
 function toggleAiPanel(){
   const p = document.getElementById("aiPanel");
   const open = !p.classList.contains("open");
