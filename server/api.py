@@ -56,6 +56,23 @@ def _audio_url(rel_path: str) -> str:
     return "/photos/" + clean
 
 
+def _delete_audio_file(rel_path: str) -> bool:
+    """Delete a stored audio file (checks both the audio and photos dirs).
+    Used to reclaim space once a capture's transcript is safely filed."""
+    rel = str(rel_path or "").replace("\\", "/").replace("/", os.sep).lstrip(os.sep)
+    if not rel:
+        return False
+    for base in (db_ops.get_audio_dir(), db_ops.get_photos_dir()):
+        p = os.path.join(base, rel)
+        if os.path.isfile(p):
+            try:
+                os.remove(p)
+                return True
+            except OSError as exc:
+                print(f"[inbox] could not delete audio {p}: {exc}")
+    return False
+
+
 def _html_response(content: str, **kwargs) -> HTMLResponse:
     """Return localized HTML for the native web pages."""
     return HTMLResponse(localize_html(content), **kwargs)
@@ -3860,12 +3877,17 @@ def mark_inbox_filed(entry_id: int, body: InboxFiled):
         record["experiment_id"] = body.experiment_id
     if body.step_id is not None:
         record["step_id"] = body.step_id
+    # The transcript is now in the experiment record — drop the recording to save space.
+    audio_deleted = False
+    if entry.get("audio_path"):
+        audio_deleted = _delete_audio_file(entry["audio_path"])
+        db_ops.set_inbox_audio(entry_id, "")
     db_ops.update_inbox_entry(
         entry_id, status="filed", proposal=record,
         filed_experiment_id=body.experiment_id, filed_step_id=body.step_id,
         filed_at=db_ops._now(),
     )
-    return {"ok": True}
+    return {"ok": True, "audio_deleted": audio_deleted}
 
 
 @app.post("/api/inbox/{entry_id}/dismiss")
