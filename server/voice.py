@@ -128,6 +128,30 @@ def transcribe_path_once(path: str) -> str:
     return _transcribe_file(path)
 
 
+def transcribe_inbox_entry_async(entry_id: int, path: str) -> None:
+    """Transcribe an inbox capture's audio in the background and merge the text
+    into the entry. Non-blocking so archiving stays instant even for long clips
+    (which go through the slower recording-file recognition path)."""
+    def _job():
+        try:
+            text = _transcribe_file(path)
+        except Exception as exc:
+            print(f"[voice] inbox transcription failed for {entry_id}: {exc}")
+            return
+        if not text:
+            return
+        try:
+            entry = db_ops.get_inbox_entry(entry_id)
+            current = (entry.get("text") or "").strip() if entry else ""
+            merged = (current + "\n" + text).strip() if current else text
+            db_ops.update_inbox_entry(entry_id, text=merged)
+            print(f"[voice] inbox {entry_id} transcribed: {len(text)} chars")
+        except Exception as exc:
+            print(f"[voice] inbox {entry_id} update failed: {exc}")
+
+    threading.Thread(target=_job, daemon=True, name=f"eln-inbox-asr-{entry_id}").start()
+
+
 def _resolve_audio_path(rel_path: str) -> str:
     rel = (rel_path or "").replace("/", os.sep)
     candidates = [

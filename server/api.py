@@ -651,6 +651,8 @@ async function savePendingText(id){
 
 loadExperiments();
 loadPending();
+// refresh so background transcription text shows up; skip while editing a note
+setInterval(() => { if(!document.querySelector(".pending-edit.open")) loadPending(); }, 12000);
 </script>
 </body>
 </html>
@@ -3649,6 +3651,12 @@ async def upload_voice_audio(
             pass
         raise HTTPException(400, "录音为空，请重试")
 
+    try:
+        from server import audio_tools
+        audio_tools.remux_to_faststart_mp4(filepath)
+    except Exception as exc:
+        print(f"[audio] remux error for voice note (exp {exp_id}): {exc}")
+
     from server import voice as voice_worker
     status = "pending" if voice_worker.transcription_available() else "audio_only"
     rel_path = f"{exp_id}/voice/{filename}"
@@ -3766,16 +3774,21 @@ async def upload_inbox_media(
         raise HTTPException(400, "文件为空")
     rel_path = f"inbox/{entry_id}/{filename}"
     if kind == "audio":
+        # Remux fragmented phone MP4 → plain faststart MP4 so <audio> plays it fully.
+        try:
+            from server import audio_tools
+            audio_tools.remux_to_faststart_mp4(filepath)
+        except Exception as exc:
+            print(f"[audio] remux error for {entry_id}: {exc}")
         updated = db_ops.set_inbox_audio(entry_id, rel_path)
+        # Transcribe in the background: long clips take the slower recording-file
+        # recognition path, so we don't block the archive request on it.
         try:
             from server import voice as voice_worker
-            text = voice_worker.transcribe_path_once(filepath)
-            if text:
-                current_text = (updated.get("text") or "").strip() if updated else ""
-                merged = (current_text + "\n" + text).strip() if current_text else text
-                updated = db_ops.update_inbox_entry(entry_id, text=merged)
+            if voice_worker.transcription_available():
+                voice_worker.transcribe_inbox_entry_async(entry_id, filepath)
         except Exception as exc:
-            print(f"[voice] inbox transcription failed for {entry_id}: {exc}")
+            print(f"[voice] inbox transcription trigger failed for {entry_id}: {exc}")
     else:
         updated = db_ops.add_inbox_image(entry_id, rel_path)
     return _inbox_to_dict(updated)

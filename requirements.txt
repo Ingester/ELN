@@ -11,6 +11,10 @@ uvicorn[standard]>=0.29.0
 # Image handling — preview TIFF/BMP attachments in the browser (converted to PNG)
 Pillow>=10.0.0
 
+# Audio: remux fragmented phone recordings → plain faststart MP4 (playable in <audio>).
+# Bundles an ffmpeg binary, so no system ffmpeg install is required.
+imageio-ffmpeg>=0.4.9
+
 # Notifications (Windows)
 # win10toast>=0.9  # optional, Windows only
 
