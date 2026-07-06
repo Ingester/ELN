@@ -1,16 +1,15 @@
-"""Generate ELN desktop icons (.ico): a clean flask on a rounded gradient tile.
-Local = warm clay, Cloud = cool blue with a small cloud badge."""
+"""ELN desktop icon: clean clay flask on a light cream tile. Light/warm, no dark bg, no green."""
 import sys
 from PIL import Image, ImageDraw
 
-S = 1024  # supersample; downscaled to 256 for crisp edges
+S = 1024
 
 
 def lerp(a, b, t):
     return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
 
-def rounded_tile(top, bottom, radius):
+def rounded_tile(top, bottom, radius, border=None):
     grad = Image.new("RGB", (S, S), top)
     d = ImageDraw.Draw(grad)
     for y in range(S):
@@ -19,48 +18,31 @@ def rounded_tile(top, bottom, radius):
     ImageDraw.Draw(mask).rounded_rectangle([28, 28, S - 28, S - 28], radius=radius, fill=255)
     out = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     out.paste(grad, (0, 0), mask)
+    if border:
+        ImageDraw.Draw(out).rounded_rectangle([28, 28, S - 28, S - 28], radius=radius, outline=border, width=6)
     return out
 
 
-def draw_flask(img, white=(251, 248, 242), liquid=(126, 176, 138)):
+def draw_flask(img, clay=(193, 107, 61), liquid=(236, 181, 130)):
     d = ImageDraw.Draw(img)
-    # flask body + neck silhouette
     flask = [(452, 250), (452, 470), (322, 812), (702, 812), (572, 470), (572, 250)]
-    d.polygon(flask, fill=white)
-    # top rim
-    d.rounded_rectangle([398, 214, 626, 258], radius=22, fill=white)
-    # liquid band inside lower body
-    liq = [(404, 606), (620, 606), (702, 812), (322, 812)]
-    d.polygon(liq, fill=liquid)
-    # bubbles
-    for (cx, cy, r) in [(470, 560, 20), (540, 520, 15), (505, 585, 12)]:
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=liquid)
+    d.polygon(flask, fill=clay)
+    d.rounded_rectangle([398, 214, 626, 258], radius=22, fill=clay)
+    d.polygon([(404, 620), (620, 620), (702, 812), (322, 812)], fill=liquid)
 
 
-def draw_cloud(img, color=(251, 248, 242)):
-    d = ImageDraw.Draw(img)
-    # small cloud badge, top-right
-    d.ellipse([610, 250, 720, 360], fill=color)
-    d.ellipse([680, 230, 810, 360], fill=color)
-    d.ellipse([740, 270, 840, 370], fill=color)
-    d.rounded_rectangle([630, 320, 830, 372], radius=26, fill=color)
+def main(root):
+    tile = rounded_tile((247, 244, 238), (237, 231, 221), radius=200, border=(228, 222, 210))
+    draw_flask(tile)
+    small = tile.resize((256, 256), Image.LANCZOS)
+    small.save(root + "/eln.ico", sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+    # preview strip at 128 + 32 on a neutral bg
+    prev = Image.new("RGB", (220, 200), (235, 235, 235))
+    prev.paste(small.resize((128, 128), Image.LANCZOS), (46, 12), small.resize((128, 128), Image.LANCZOS))
+    s32 = small.resize((32, 32), Image.LANCZOS)
+    prev.paste(s32, (94, 150), s32)
+    prev.save(root + "/_icon_preview.png")
+    print("wrote", root + "/eln.ico")
 
 
-def save_ico(img, path):
-    small = img.resize((256, 256), Image.LANCZOS)
-    small.save(path, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
-    print("wrote", path)
-
-
-root = sys.argv[1].rstrip("/\\")
-
-# local: warm clay tile + flask
-local = rounded_tile((196, 118, 66), (168, 90, 48), radius=200)
-draw_flask(local)
-save_ico(local, root + "/eln_local.ico")
-
-# cloud: cool blue tile + flask + cloud badge
-cloud = rounded_tile((84, 148, 196), (46, 100, 150), radius=200)
-draw_flask(cloud, liquid=(210, 232, 246))
-draw_cloud(cloud)
-save_ico(cloud, root + "/eln_cloud.ico")
+main(sys.argv[1].rstrip("/\\"))
