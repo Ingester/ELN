@@ -979,6 +979,14 @@ _LIST_CSS = _NAV_CSS + """
     .badge.done { background:var(--pos-soft); color:#2c5c40; border-color:#cfe2d5; }
     .empty { text-align:center; color:var(--muted); padding:44px 0; }
     .top-actions { display:flex; justify-content:flex-end; margin-bottom:12px; }
+    .month { margin-bottom:14px; }
+    .month > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px;
+      padding:9px 4px; font-weight:700; font-size:14px; color:var(--ink); border-bottom:1px solid var(--line);
+      margin-bottom:12px; user-select:none; }
+    .month > summary::-webkit-details-marker { display:none; }
+    .month > summary .chev { transition:transform .15s ease; color:var(--faint); display:inline-flex; }
+    .month[open] > summary .chev { transform:rotate(90deg); }
+    .month > summary .mcount { margin-left:auto; font-weight:500; font-size:12px; color:var(--muted); }
     .modal-backdrop { position:fixed; inset:0; z-index:70; display:none; align-items:center; justify-content:center;
       background:rgba(20,18,15,.4); padding:18px; }
     .modal-backdrop.open { display:flex; }
@@ -1114,23 +1122,43 @@ def history_page(request: Request):
 function esc(v){{ return String(v ?? "").replace(/[&<>"']/g, s => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[s])); }}
 async function api(p){{ const r = await fetch(p); if(!r.ok) throw new Error(await r.text()); return r.json(); }}
 const LABEL = {{active:"进行中", needs_wrapup:"待收尾", completed:"已完成", archived:"已归档", abandoned:"已放弃"}};
+function cardHtml(x){{
+  const active = (x.status==="active"||x.status==="needs_wrapup");
+  const cls = x.status==="completed" ? "done" : (active ? "active" : "");
+  const date = x.created_at ? new Date(x.created_at).toLocaleDateString() : "";
+  return `<div class="row-card">
+    <div class="rt">${{esc(x.name)}} <span class="badge ${{cls}}">${{LABEL[x.status]||x.status}}</span></div>
+    <div class="rm">${{date}} · 步骤 ${{x.completed_steps}}/${{x.total_steps}}</div>
+    <div class="ra">
+      ${{active ? `<a class="button green" href="/run?experiment_id=${{x.id}}">继续</a>` : ""}}
+      <a class="button secondary" href="/run/report/${{x.id}}?return_to=history">查看报告</a>
+    </div>
+  </div>`;
+}}
+function monthKey(x){{
+  const d = x.created_at ? new Date(x.created_at) : null;
+  return (d && !isNaN(d)) ? (d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0")) : "0000-00";
+}}
 async function load(){{
   let xs = [];
   try {{ xs = await api("/api/experiment_summaries?status=active,needs_wrapup,completed,archived,abandoned"); }} catch {{}}
   const box = document.getElementById("list");
   if(!xs.length){{ box.innerHTML = '<div class="empty">还没有实验记录。</div>'; return; }}
-  box.innerHTML = xs.map(x => {{
-    const active = (x.status==="active"||x.status==="needs_wrapup");
-    const cls = x.status==="completed" ? "done" : (active ? "active" : "");
-    const date = x.created_at ? new Date(x.created_at).toLocaleDateString() : "";
-    return `<div class="row-card">
-      <div class="rt">${{esc(x.name)}} <span class="badge ${{cls}}">${{LABEL[x.status]||x.status}}</span></div>
-      <div class="rm">${{date}} · 步骤 ${{x.completed_steps}}/${{x.total_steps}}</div>
-      <div class="ra">
-        ${{active ? `<a class="button green" href="/run?experiment_id=${{x.id}}">继续</a>` : ""}}
-        <a class="button secondary" href="/run/report/${{x.id}}?return_to=history">查看报告</a>
-      </div>
-    </div>`;
+  xs.sort((a,b) => String(b.created_at||"").localeCompare(String(a.created_at||"")));
+  const groups = {{}};
+  for(const x of xs){{ const k = monthKey(x); (groups[k] = groups[k] || []).push(x); }}
+  const now = new Date();
+  const curKey = now.getFullYear() + "-" + String(now.getMonth()+1).padStart(2,"0");
+  const chev = svgIcon("chevron-right", 16);
+  box.innerHTML = Object.keys(groups).sort().reverse().map(key => {{
+    const items = groups[key];
+    const label = key === "0000-00" ? "未知日期"
+      : (parseInt(key.slice(0,4),10) + "年" + parseInt(key.slice(5,7),10) + "月");
+    const open = key === curKey ? " open" : "";
+    return `<details class="month"${{open}}>
+      <summary><span class="chev">${{chev}}</span>${{label}}<span class="mcount">${{items.length}}</span></summary>
+      ${{items.map(cardHtml).join("")}}
+    </details>`;
   }}).join("");
 }}
 load();
