@@ -181,7 +181,7 @@ def _render_step(step: Step, timer_events: list[dict] | None = None,
 
     notes = str(values.get(STEP_NOTES_KEY, "") or "").strip()
     if notes:
-        lines.append("**备注**：")
+        lines.append("**备注 / Markdown 记录**：")
         lines.append("")
         lines.append(notes)
         lines.append("")

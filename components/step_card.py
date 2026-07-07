@@ -213,32 +213,49 @@ class StepCard(ft.Container):
         # ── Free notes ───────────────────────────
         self._notes_status = ft.Text("", size=12, color=ft.Colors.GREY_600)
         notes_value = self._values.get(_STEP_NOTES_KEY, "")
-        if os.environ.get("ELN_WEB_MODE") == "1":
-            self._notes_control = WebKeyboardInput(
-                value=notes_value,
-                on_change=lambda value: self._capture_notes(value),
-                on_submit=lambda value: self._save_notes(value),
-                placeholder="点击后记录本步骤备注",
-                multiline=True,
-            )
-        else:
-            self._notes_control = ft.TextField(
-                value=notes_value,
-                hint_text="记录本步骤的临时观察、异常、样品情况等",
-                multiline=True,
-                min_lines=2,
-                max_lines=5,
-                border_color=ft.Colors.ORANGE_200,
-                focused_border_color=ft.Colors.ORANGE_600,
-                on_blur=lambda e: self._save_notes(e.control.value),
-            )
+        notes_has_value = bool(str(notes_value or "").strip())
+        self._notes_control = None
+        if notes_has_value:
+            if os.environ.get("ELN_WEB_MODE") == "1":
+                self._notes_control = WebKeyboardInput(
+                    value=notes_value,
+                    on_change=lambda value: self._capture_notes(value),
+                    on_submit=lambda value: self._save_notes(value),
+                    placeholder="Markdown 记录；报告中会按 Markdown 渲染",
+                    multiline=True,
+                )
+            else:
+                self._notes_control = ft.TextField(
+                    value=notes_value,
+                    hint_text="Markdown 记录；报告中会按 Markdown 渲染",
+                    multiline=True,
+                    min_lines=2,
+                    max_lines=5,
+                    border_color=ft.Colors.ORANGE_200,
+                    focused_border_color=ft.Colors.ORANGE_600,
+                    on_blur=lambda e: self._save_notes(e.control.value),
+                )
+        md_head = ft.Row([
+            ft.TextButton(
+                "写 md",
+                on_click=self._open_md_notes_editor,
+                style=ft.ButtonStyle(
+                    color=ft.Colors.GREY_600 if not notes_has_value else ft.Colors.ORANGE_700,
+                    bgcolor=ft.Colors.GREY_100 if not notes_has_value else ft.Colors.ORANGE_50,
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=2),
+                ),
+            ),
+            ft.Text(
+                "已写 Markdown 记录" if notes_has_value else "AI 可写入这里",
+                size=12,
+                color=ft.Colors.GREY_500,
+            ),
+        ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        notes_children = [md_head, self._notes_status]
+        if self._notes_control is not None:
+            notes_children.insert(1, self._notes_control)
         notes_section = ft.Container(
-            content=ft.Column([
-                ft.Text("备注", size=14, weight=ft.FontWeight.W_500,
-                        color=ft.Colors.GREY_700),
-                self._notes_control,
-                self._notes_status,
-            ], spacing=6),
+            content=ft.Column(notes_children, spacing=6),
             border=ft.Border.all(1, ft.Colors.GREY_200),
             border_radius=8,
             padding=12,
@@ -506,6 +523,47 @@ class StepCard(ft.Container):
                 ft.Text(
                     "一行一个字段：key | label | type | required | options逗号分隔 | 当前值。"
                     "步骤备注已经是固定区域，不需要在这里新增备注字段。",
+                    size=12, color=ft.Colors.GREY_600,
+                ),
+                tf,
+                err,
+            ], tight=True, spacing=8),
+            actions=[
+                ft.TextButton("取消", on_click=lambda _: _close_overlay(self.page, dlg)),
+                ft.ElevatedButton("保存", on_click=_save),
+            ],
+        )
+        _open_overlay(self.page, dlg)
+
+    def _open_md_notes_editor(self, _) -> None:
+        self._sync_field_values()
+        tf = ft.TextField(
+            label="Markdown 记录",
+            value=self._values.get(_STEP_NOTES_KEY, ""),
+            hint_text="给 AI 或自己写 Markdown 记录；报告中会按 Markdown 渲染",
+            multiline=True,
+            min_lines=8,
+            max_lines=14,
+            width=680,
+            autofocus=True,
+        )
+        err = ft.Text("", size=12, color=ft.Colors.RED_600)
+
+        def _save(_):
+            try:
+                self._save_notes(tf.value or "")
+                _close_overlay(self.page, dlg)
+                self._build_content()
+                self.page.update()
+            except Exception as ex:
+                err.value = f"保存失败：{ex}"
+                self.page.update()
+
+        dlg = ft.AlertDialog(
+            title=ft.Text("编辑 Markdown 记录"),
+            content=ft.Column([
+                ft.Text(
+                    "适合放观察、异常、解释和 AI 整理结果；数字和短字段仍填结构化字段。",
                     size=12, color=ft.Colors.GREY_600,
                 ),
                 tf,

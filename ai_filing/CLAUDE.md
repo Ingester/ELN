@@ -27,6 +27,7 @@
 - **数值只有用户明确说了才填**；带单位只填数字部分，绝不编造数字。
 - 一条速记的内容可以**拆开写到多个步骤/字段**（分散落位）。
 - 那一步**没有合适的字段**时，可以给这步**新增一个字段**来承载，或写进该步备注。
+- 长段观察、解释、异常、AI 总结写进该步 Markdown 记录：`values["__eln_step_notes"]`。可以使用 Markdown；若已有内容，追加新段落，不要覆盖旧内容。
 - 明显不属于任何现有实验的，**提议新建实验**（给出实验名、步骤结构；结构参考仓库根目录 `ELN_Protocol_Format.md` 和 `protocol_templates/`）。
 
 把上面整理成一份**清单**发给用户：每条速记 → 目标实验/步骤 → 要写入的值 / 要新增的字段 / 要新建的实验。
@@ -38,7 +39,7 @@
 
 - **写入某步**：先 `GET /api/steps/{step_id}` 拿当前 `values` 和 `fields`；把要写的值并进 `values`；
   `PATCH /api/steps/{step_id}`，body `{"values_json": "<整个 values 的 JSON 字符串>"}`。
-  备注可并进该步的备注字段。
+  Markdown 记录写进 `values["__eln_step_notes"]`，保留旧内容并追加。
 - **新增字段**（当前步没有合适的框时）：在原 `fields` 数组后追加 `{"key","label","type"，需要时"options"}`，
   同一次 `PATCH` 传 `{"fields_json": "<整个 fields 的 JSON 字符串>", "values_json": "<含新 key 值的 values>"}`。
 - **新建实验**：`POST /api/experiments`，body `{"name":"...","protocol_json":"<ProtocolDefinition 的 JSON 字符串>"}`；
