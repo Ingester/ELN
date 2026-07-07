@@ -11,7 +11,6 @@ import hashlib
 import hmac
 import json
 import os
-import re
 import time
 import urllib.error
 import urllib.request
@@ -131,19 +130,8 @@ def _tc3_post(action: str, payload_obj: dict[str, Any], timeout: int = 60) -> di
     return response
 
 
-def transcribe_file(path: str) -> str:
-    cfg = get_transcription_config()
-    if cfg.get("provider") != "tencent":
-        raise TencentAsrError("Tencent ASR is not selected")
-    if not os.path.exists(path):
-        raise TencentAsrError(f"Audio file not found: {path}")
-    with open(path, "rb") as f:
-        audio = f.read()
-    if not audio:
-        raise TencentAsrError("Audio file is empty")
-
-    # Try 一句话识别 (fast, <=60s). If the clip is too long, fall back to the
-    # 录音文件识别 (recording file recognition) async task, which handles hours.
+def _sentence_recognize(path: str, audio: bytes, cfg: dict) -> str:
+    """One 一句话识别 (SentenceRecognition) call on a <=60s clip."""
     payload_obj: dict[str, Any] = {
         "ProjectId": 0,
         "SubServiceType": 2,
@@ -154,12 +142,7 @@ def transcribe_file(path: str) -> str:
         "Data": base64.b64encode(audio).decode("ascii"),
         "DataLen": len(audio),
     }
-    try:
-        response = _tc3_post(ACTION, payload_obj)
-    except TencentAsrError as exc:
-        if _is_too_long(exc):
-            return _transcribe_rectask(path, audio, cfg)
-        raise
+    response = _tc3_post(ACTION, payload_obj)
     return (response.get("Result") or "").strip()
 
 
@@ -168,43 +151,41 @@ def _is_too_long(exc: Exception) -> bool:
     return "TooLong" in msg or "ErrorVoicedata" in msg or "exceeds" in msg or "60 seconds" in msg
 
 
-def _transcribe_rectask(path: str, audio: bytes, cfg: dict) -> str:
-    """Long audio via 录音文件识别 (CreateRecTask + DescribeTaskStatus polling).
-    Reuses the same TC3 credentials — no extra config needed."""
-    create = {
-        "EngineModelType": cfg.get("tencent_engine") or "16k_zh",
-        "ChannelNum": 1,
-        "ResTextFormat": 0,
-        "SourceType": 1,
-        "Data": base64.b64encode(audio).decode("ascii"),
-        "DataLen": len(audio),
-    }
-    resp = _tc3_post("CreateRecTask", create)
-    task_id = (resp.get("Data") or {}).get("TaskId")
-    if task_id is None:
-        raise TencentAsrError("录音文件识别未返回 TaskId")
-    deadline = time.time() + 300
-    while time.time() < deadline:
-        time.sleep(4)
-        status_resp = _tc3_post("DescribeTaskStatus", {"TaskId": int(task_id)})
-        data = status_resp.get("Data") or {}
-        status = data.get("Status")
-        if status == 2:  # success
-            return _clean_rectask_result(data.get("Result") or "")
-        if status == 3:  # failed
-            raise TencentAsrError(
-                f"录音文件识别失败: {data.get('ErrorMsg') or data.get('Message') or ''}"
-            )
-    raise TencentAsrError("录音文件识别超时")
+def transcribe_file(path: str) -> str:
+    """Transcribe with 一句话识别 (SentenceRecognition). Clips over its 60s limit
+    are split into <=55s chunks (via ffmpeg) and stitched, so the same engine is
+    used for any length."""
+    cfg = get_transcription_config()
+    if cfg.get("provider") != "tencent":
+        raise TencentAsrError("Tencent ASR is not selected")
+    if not os.path.exists(path):
+        raise TencentAsrError(f"Audio file not found: {path}")
+    with open(path, "rb") as f:
+        audio = f.read()
+    if not audio:
+        raise TencentAsrError("Audio file is empty")
 
+    try:
+        return _sentence_recognize(path, audio, cfg)
+    except TencentAsrError as exc:
+        if not _is_too_long(exc):
+            raise
 
-def _clean_rectask_result(text: str) -> str:
-    """ResTextFormat=0 returns lines like '[0:0.240,0:3.100]  你好' — strip the
-    leading timestamp bracket from each line and join."""
-    parts = []
-    for line in str(text).splitlines():
-        line = re.sub(r"^\s*\[[^\]]*\]\s*", "", line).strip()
-        if line:
-            parts.append(line)
-    joined = " ".join(parts).strip()
-    return joined or str(text).strip()
+    # Too long for one call — split into <=55s chunks and recognize each.
+    from server import audio_tools
+    chunks = audio_tools.split_audio(path, 55)
+    if len(chunks) <= 1:
+        raise TencentAsrError("录音超过60秒且无法分段转写（缺少 ffmpeg）")
+    parts: list[str] = []
+    try:
+        for chunk in chunks:
+            with open(chunk, "rb") as f:
+                cb = f.read()
+            if not cb:
+                continue
+            text = _sentence_recognize(chunk, cb, cfg)
+            if text:
+                parts.append(text)
+    finally:
+        audio_tools.cleanup_chunks(chunks)
+    return " ".join(parts).strip()
