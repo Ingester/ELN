@@ -237,18 +237,13 @@ class StepCard(ft.Container):
                 )
         md_head = ft.Row([
             ft.TextButton(
-                "写 md",
+                "md",
                 on_click=self._open_md_notes_editor,
                 style=ft.ButtonStyle(
                     color=ft.Colors.GREY_600 if not notes_has_value else ft.Colors.ORANGE_700,
                     bgcolor=ft.Colors.GREY_100 if not notes_has_value else ft.Colors.ORANGE_50,
                     padding=ft.Padding.symmetric(horizontal=10, vertical=2),
                 ),
-            ),
-            ft.Text(
-                "已写 Markdown 记录" if notes_has_value else "AI 可写入这里",
-                size=12,
-                color=ft.Colors.GREY_500,
             ),
         ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
         notes_children = [md_head, self._notes_status]
@@ -540,7 +535,7 @@ class StepCard(ft.Container):
         tf = ft.TextField(
             label="Markdown 记录",
             value=self._values.get(_STEP_NOTES_KEY, ""),
-            hint_text="给 AI 或自己写 Markdown 记录；报告中会按 Markdown 渲染",
+            hint_text="Markdown 记录；报告中会按 Markdown 渲染",
             multiline=True,
             min_lines=8,
             max_lines=14,

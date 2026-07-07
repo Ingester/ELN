@@ -2123,11 +2123,10 @@ function renderSteps(items){
   const notesBlock = `
     <div class="field notes md-slot ${hasMdNote ? "has-md" : ""}" id="md-slot-${step.id}">
       <div class="md-line">
-        <button type="button" class="md-chip" onclick="toggleMdSlot(${step.id})" title="输入或修改 Markdown 记录">写 md</button>
-        <span class="small" id="md-hint-${step.id}">${hasMdNote ? "已写 Markdown 记录" : "AI 可写入这里"}</span>
+        <button type="button" class="md-chip" onclick="toggleMdSlot(${step.id})" title="输入或修改 Markdown 记录">md</button>
       </div>
       <div class="md-box ${hasMdNote ? "open" : ""}" id="md-box-${step.id}">
-        <textarea data-step="${step.id}" data-key="${STEP_NOTES_KEY}" oninput="saveDraft(${step.id}); updateMdSlot(${step.id})" placeholder="给 AI 或自己写 Markdown 记录；报告中会按 Markdown 渲染">${esc(notesValue)}</textarea>
+        <textarea data-step="${step.id}" data-key="${STEP_NOTES_KEY}" oninput="saveDraft(${step.id}); updateMdSlot(${step.id})" placeholder="Markdown 记录；报告中会按 Markdown 渲染">${esc(notesValue)}</textarea>
         <div class="small">支持 Markdown。适合放观察、异常、解释、AI 整理结果；数字和短字段仍填上面的结构化字段。</div>
       </div>
     </div>`;
@@ -2254,10 +2253,8 @@ function toggleMdSlot(stepId){
 function updateMdSlot(stepId){
   const ta = mdTextarea(stepId);
   const slot = document.getElementById("md-slot-" + stepId);
-  const hint = document.getElementById("md-hint-" + stepId);
   const hasText = !!(ta && ta.value.trim());
   if(slot) slot.classList.toggle("has-md", hasText);
-  if(hint) hint.textContent = hasText ? "已写 Markdown 记录" : "AI 可写入这里";
 }
 
 function renderDescription(step){
@@ -4372,8 +4369,8 @@ def web_edit_step_form(step_id: int):
     <form method="post">
       {"".join(field_html)}
       <label>
-        <span>Markdown 记录 <em>写 md</em></span>
-        <textarea name="{STEP_NOTES_KEY}" placeholder="给 AI 或自己写 Markdown 记录；报告中会按 Markdown 渲染">{notes_value}</textarea>
+        <span>Markdown 记录 <em>md</em></span>
+        <textarea name="{STEP_NOTES_KEY}" placeholder="Markdown 记录；报告中会按 Markdown 渲染">{notes_value}</textarea>
       </label>
       <div class="actions">
         <button type="submit">保存并返回 ELN</button>
