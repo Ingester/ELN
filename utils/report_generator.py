@@ -103,20 +103,6 @@ def generate_report(
             lines.append(f"- **Step {s.step_index + 1}** · {s.title}")
         lines.append("")
 
-    # ── Raw protocol JSON ────────────────────────
-    lines.append("---")
-    lines.append("")
-    lines.append("## 原始协议参数")
-    lines.append("")
-    lines.append("<details><summary>展开查看 JSON</summary>")
-    lines.append("")
-    lines.append("```json")
-    lines.append(experiment.protocol_json)
-    lines.append("```")
-    lines.append("")
-    lines.append("</details>")
-    lines.append("")
-
     return "\n".join(lines)
 
 
