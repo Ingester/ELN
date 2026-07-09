@@ -107,6 +107,7 @@ _TRANSCRIPTION_DEFAULTS = {
     "openai_api_key": "",
     "openai_base_url": "https://api.openai.com/v1",
     "openai_model": "gpt-4o-mini-transcribe",
+    "openai_prompt": "",   # hotword / context prompt to bias spelling (bio terms, 中英夹杂)
 }
 
 
@@ -159,13 +160,18 @@ def get_transcription_config() -> dict[str, str]:
         os.environ.get("ELN_OPENAI_TRANSCRIBE_MODEL")
         or out["openai_model"]
     ).strip() or "gpt-4o-mini-transcribe"
+    out["openai_prompt"] = (
+        os.environ.get("ELN_OPENAI_TRANSCRIBE_PROMPT")
+        or out["openai_prompt"]
+    )
     return out
 
 
 def set_transcription_config(provider: str = None, tencent_secret_id: str = None,
                              tencent_secret_key: str = None, tencent_region: str = None,
                              tencent_engine: str = None, openai_api_key: str = None,
-                             openai_base_url: str = None, openai_model: str = None) -> None:
+                             openai_base_url: str = None, openai_model: str = None,
+                             openai_prompt: str = None) -> None:
     settings = load_settings()
     cfg = settings.get("transcription", {})
     if not isinstance(cfg, dict):
@@ -192,6 +198,8 @@ def set_transcription_config(provider: str = None, tencent_secret_id: str = None
         cfg["openai_base_url"] = openai_base_url.strip()
     if openai_model is not None:
         cfg["openai_model"] = openai_model.strip()
+    if openai_prompt is not None:
+        cfg["openai_prompt"] = openai_prompt
     settings["transcription"] = cfg
     save_settings(settings)
 

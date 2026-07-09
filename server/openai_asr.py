@@ -16,6 +16,22 @@ class OpenAiAsrError(RuntimeError):
     pass
 
 
+# Plain vocabulary of terms likely to appear in these notes (中英夹杂 bio-research).
+# Just words that may be spoken — not misheard->correct mappings. Used as the
+# transcription `prompt` to bias spelling; override via settings openai_prompt.
+DEFAULT_HOTWORDS = (
+    "生物科研实验室的中英夹杂语音笔记（秀丽隐杆线虫 C. elegans、细胞培养、分子克隆、蛋白纯化）。"
+    "可能出现的术语："
+    "C8orf82, ETF, ETFA, TMEM161, TMX2, APOL3, HRG-1, GST-4, FAT-7, FASN, APOE4, APP, Tau, "
+    "mCherry, mEmerald, mScarlet, mEmerald-Mito-7, mito-7, GFP, pHAGE, LipoD293, "
+    "N2, L4, gk, gk609478, 161, null, hermaphrodite, male, F1, F2, cross, "
+    "CRISPR, sgRNA, RNAi, shRNA, knockout, KO, PCR, single-worm PCR, Co-IP, IP-MS, lysis, "
+    "lentivirus, miniprep, transfection, transformation, Oil Red O, lipid droplet, colocalization, "
+    "SEC, AKTA, IEX, DCIP, Strep-bead, OP50, brood size, coding sequence, primer, heme plate, "
+    "ampicillin, HEK293, 293, 24孔板, 96孔板, 6cm dish, T25, redox reporter, oxidative stress。"
+)
+
+
 def configured() -> bool:
     cfg = get_transcription_config()
     return cfg.get("provider") == "openai" and bool(cfg.get("openai_api_key"))
@@ -63,12 +79,15 @@ def transcribe_file(path: str) -> str:
         raise OpenAiAsrError(f"Audio file not found: {path}")
 
     base_url = (cfg.get("openai_base_url") or "https://api.openai.com/v1").rstrip("/")
-    model = cfg.get("openai_model") or "gpt-4o-mini-transcribe"
-    body, boundary = _multipart(
-        {"model": model, "response_format": "json"},
-        "file",
-        path,
-    )
+    model = cfg.get("openai_model") or "gpt-4o-transcribe"
+    fields = {"model": model, "response_format": "json"}
+    # Hotword / context prompt biases spelling of domain terms (中英夹杂 bio notes).
+    # Falls back to the built-in vocabulary when settings don't override it.
+    prompt = (cfg.get("openai_prompt") or "").strip() or DEFAULT_HOTWORDS
+    if prompt:
+        fields["prompt"] = prompt
+    # No language is forced, so Chinese-English code-switching is preserved.
+    body, boundary = _multipart(fields, "file", path)
     req = urllib.request.Request(
         base_url + "/audio/transcriptions",
         data=body,
