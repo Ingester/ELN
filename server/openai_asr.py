@@ -21,14 +21,18 @@ class OpenAiAsrError(RuntimeError):
 # transcription `prompt` to bias spelling; override via settings openai_prompt.
 DEFAULT_HOTWORDS = (
     "生物科研实验室的中英夹杂语音笔记（秀丽隐杆线虫 C. elegans、细胞培养、分子克隆、蛋白纯化）。"
-    "可能出现的术语："
+    "英文术语："
     "C8orf82, ETF, ETFA, TMEM161, TMX2, APOL3, HRG-1, GST-4, FAT-7, FASN, APOE4, APP, Tau, "
     "mCherry, mEmerald, mScarlet, mEmerald-Mito-7, mito-7, GFP, pHAGE, LipoD293, "
     "N2, L4, gk, gk609478, 161, null, hermaphrodite, male, F1, F2, cross, "
     "CRISPR, sgRNA, RNAi, shRNA, knockout, KO, PCR, single-worm PCR, Co-IP, IP-MS, lysis, "
-    "lentivirus, miniprep, transfection, transformation, Oil Red O, lipid droplet, colocalization, "
+    "lentivirus, miniprep, transfection, Oil Red O, lipid droplet, colocalization, "
     "SEC, AKTA, IEX, DCIP, Strep-bead, OP50, brood size, coding sequence, primer, heme plate, "
-    "ampicillin, HEK293, 293, 24孔板, 96孔板, 6cm dish, T25, redox reporter, oxidative stress。"
+    "ampicillin, HEK293, 293, T25。"
+    "中文术语："
+    "溶酶体、线粒体、脂滴、质粒、转染、转化、过表达、敲低、敲除、裂解、杂交、雄虫、雌雄同体、杂合体、"
+    "单菌落、涂板、划线、摇菌、荧光、共定位、测序、引物、胶回收、注射、复苏、抗性、氨苄、对照、阴性对照、"
+    "氧化应激、还原、换液、传代、传细胞、密度、后代、包病毒、梯度、24孔板、96孔板、6cm皿。"
 )
 
 
