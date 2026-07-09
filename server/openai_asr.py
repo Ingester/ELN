@@ -28,11 +28,11 @@ DEFAULT_HOTWORDS = (
     "CRISPR, sgRNA, RNAi, shRNA, knockout, KO, PCR, single-worm PCR, Co-IP, IP-MS, lysis, "
     "lentivirus, miniprep, transfection, Oil Red O, lipid droplet, colocalization, "
     "SEC, AKTA, IEX, DCIP, Strep-bead, OP50, brood size, coding sequence, primer, heme plate, "
-    "ampicillin, HEK293, 293, T25。"
+    "ampicillin, Dox, doxycycline, HEK293, 293, T25。"
     "中文术语："
     "溶酶体、线粒体、脂滴、质粒、转染、转化、过表达、敲低、敲除、裂解、杂交、雄虫、雌雄同体、杂合体、"
     "单菌落、涂板、划线、摇菌、荧光、共定位、测序、引物、胶回收、注射、复苏、抗性、氨苄、对照、阴性对照、"
-    "氧化应激、还原、换液、传代、传细胞、密度、后代、包病毒、梯度、24孔板、96孔板、6cm皿。"
+    "氧化应激、换液、加药、传代、传细胞、密度、后代、包病毒、梯度、24孔板、96孔板、6cm皿。"
 )
 
 
