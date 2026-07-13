@@ -62,11 +62,23 @@
     layer.appendChild(popover);
     setTimeout(function(){ document.addEventListener('click',closePopover,{once:true}); },0);
   }
+  // Only label a comment with what it's "on" when the clicked element is
+  // specific — not a big container (body/main/section) whose textContent is the
+  // whole page. Empty-space clicks become pure position pins (no misleading 对：).
+  function anchorLabel(el){
+    if(!el || el.nodeType!==1) return '';
+    var tag=(el.tagName||'').toLowerCase();
+    if(['body','html','main','section','nav','header','footer','form','ul','ol','article'].indexOf(tag)>=0) return '';
+    var lab=(el.getAttribute&&(el.getAttribute('aria-label')||el.getAttribute('placeholder')))||'';
+    var txt=String(lab||el.textContent||'').trim().replace(/\s+/g,' ');
+    if(!txt || txt.length>70) return '';
+    return txt.slice(0,60);
+  }
   function closeComposer(){ if(composer){ composer.remove(); composer=null; } }
   function openComposer(px,py,target){
     closeComposer();
-    var anchor=cssPath(target);
-    var atext=target?String((target.getAttribute&&(target.getAttribute('aria-label')||target.getAttribute('placeholder')))||target.textContent||'').trim().replace(/\s+/g,' ').slice(0,60):'';
+    var atext=anchorLabel(target);
+    var anchor=atext?cssPath(target):'';
     composer=document.createElement('div');
     composer.style.cssText='position:absolute;left:'+px+'px;top:'+py+'px;z-index:2147483002;background:#fff;border:1px solid #ccc;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.22);padding:10px;width:240px;';
     composer.innerHTML=(atext?'<div style="color:#8a5a44;font-size:12px;margin-bottom:6px">对：'+esc(atext)+'</div>':'')+
@@ -108,13 +120,21 @@
     toolbar.appendChild(btn); toolbar.appendChild(tag);
     document.body.appendChild(toolbar);
   }
+  function buildBanner(){
+    if(MODE!=='openview') return;
+    var bar=document.createElement('div');
+    bar.textContent='分享查看/评论模式 · '+ME+' — 这是别人分享给你的视图，你的改动会被记录';
+    bar.style.cssText='position:fixed;top:0;left:0;right:0;z-index:2147483003;background:#bd5b3d;color:#fff;font-size:12.5px;font-weight:600;text-align:center;padding:6px 12px;box-shadow:0 1px 4px rgba(0,0,0,.2);';
+    document.body.appendChild(bar);
+    document.body.style.paddingTop='30px';
+  }
   var rt=null;
   function scheduleReposition(){ if(rt)return; rt=setTimeout(function(){ rt=null; renderPins(); },120); }
 
   api('/api/openview/whoami').then(function(w){
     MODE=w.mode; ME=w.name; CAN=w.can_comment;
     if(MODE==='none') return;
-    ensureLayer(); buildToolbar();
+    ensureLayer(); buildToolbar(); buildBanner();
     document.addEventListener('click', onDocClick, true);
     window.addEventListener('scroll', scheduleReposition, true);
     window.addEventListener('resize', scheduleReposition);
