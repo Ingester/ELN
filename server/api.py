@@ -10,11 +10,13 @@ import hmac
 import io
 import os
 import json
+import re
 import shutil
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Optional, Any
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs, quote, unquote
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -73,9 +75,15 @@ def _delete_audio_file(rel_path: str) -> bool:
     return False
 
 
+_OVERLAY_TAG = '<script src="/openview/overlay.js" defer></script>'
+
+
 def _html_response(content: str, **kwargs) -> HTMLResponse:
-    """Return localized HTML for the native web pages."""
-    return HTMLResponse(localize_html(content), **kwargs)
+    """Return localized HTML for the native web pages, with the comment overlay injected."""
+    html = localize_html(content)
+    if "</body>" in html and _OVERLAY_TAG not in html:
+        html = html.replace("</body>", _OVERLAY_TAG + "\n</body>", 1)
+    return HTMLResponse(html, **kwargs)
 
 
 # ─────────────────────────────────────────────
@@ -122,6 +130,52 @@ def _valid_auth_token(token: str) -> bool:
         return (time.time() - int(issued)) <= _auth_cookie_max_age()
     except Exception:
         return False
+
+
+def _openview_password() -> str:
+    return os.environ.get("ELN_OPENVIEW_PASSWORD", "")
+
+
+def _openview_cookie_name() -> str:
+    return "eln_openview"
+
+
+def _openview_secret() -> bytes:
+    return hashlib.sha256(f"eln-openview:{_openview_password()}".encode("utf-8")).digest()
+
+
+def _make_openview_token() -> str:
+    issued = str(int(time.time()))
+    sig = hmac.new(_openview_secret(), issued.encode("utf-8"), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(f"{issued}:{sig}".encode("utf-8")).decode("ascii")
+
+
+def _valid_openview_token(token: str) -> bool:
+    if not token or not _openview_password():
+        return False
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode("ascii")).decode("utf-8")
+        issued, sig = decoded.split(":", 1)
+        expected = hmac.new(_openview_secret(), issued.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return False
+        return (time.time() - int(issued)) <= _auth_cookie_max_age()
+    except Exception:
+        return False
+
+
+def _client_ip(request: Request) -> str:
+    for h in ("cf-connecting-ip", "x-forwarded-for"):
+        v = request.headers.get(h, "")
+        if v:
+            return v.split(",")[0].strip()
+    return (request.client.host if request.client else "") or "?"
+
+
+def _ip_nickname(ip: str) -> str:
+    """Stable short nickname derived from the visitor's IP, e.g. 访客·7F3."""
+    h = hashlib.sha256(("eln-nick:" + str(ip)).encode("utf-8")).hexdigest()
+    return "访客·" + h[:3].upper()
 
 
 def _auth_cookie_secure(request: Request) -> bool:
@@ -195,23 +249,45 @@ def _is_local_direct(request: Request) -> bool:
 
 @app.middleware("http")
 async def optional_password_auth(request: Request, call_next):
-    if not _auth_password():
-        return await call_next(request)
     path = request.url.path
+    # Always-open endpoints (login flows + the overlay bootstrap).
     if (
         request.method == "OPTIONS"
-        or path in {"/login", "/logout", "/api/health", "/favicon.ico"}
+        or path in {
+            "/login", "/logout", "/api/health", "/favicon.ico",
+            "/openview", "/openview/login", "/openview/logout",
+            "/openview/overlay.js", "/api/openview/whoami",
+        }
     ):
         return await call_next(request)
-    # Local tools (Claude Code / Codex / curl on this machine) skip the password;
-    # the password guards the public tunnel only.
-    if _is_local_direct(request):
-        return await call_next(request)
-    if _valid_auth_token(request.cookies.get(_auth_cookie_name(), "")):
-        return await call_next(request)
-    if _wants_html(request):
-        return RedirectResponse(f"/login?next={quote(_auth_next_path(request))}", status_code=303)
-    return JSONResponse({"detail": "Authentication required"}, status_code=401)
+
+    main_ok = bool(_auth_password()) and _valid_auth_token(request.cookies.get(_auth_cookie_name(), ""))
+    open_ok = _valid_openview_token(request.cookies.get(_openview_cookie_name(), ""))
+    # Local tools (Claude Code / Codex / curl on this machine) are treated as owner.
+    local = _is_local_direct(request)
+    request.state.mode = "owner" if (main_ok or local) else ("openview" if open_ok else "none")
+
+    authed = (not _auth_password()) or main_ok or open_ok or local
+    if not authed:
+        if _wants_html(request):
+            return RedirectResponse(f"/login?next={quote(_auth_next_path(request))}", status_code=303)
+        return JSONResponse({"detail": "Authentication required"}, status_code=401)
+
+    # Record data changes made by openview visitors so the owner can review them.
+    is_openview_edit = (
+        request.state.mode == "openview"
+        and request.method in ("POST", "PATCH", "PUT", "DELETE")
+        and path.startswith("/api/")
+        and not path.startswith("/api/openview/")
+    )
+    body_bytes = await request.body() if is_openview_edit else b""
+    response = await call_next(request)
+    if is_openview_edit and 200 <= response.status_code < 300:
+        try:
+            _log_openview_change(request, path, body_bytes)
+        except Exception as exc:
+            print(f"[openview] change log failed: {exc}")
+    return response
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -227,24 +303,32 @@ async def login_submit(request: Request):
     next_path = parsed.get("next", ["/run"])[0] or "/run"
     if not next_path.startswith("/"):
         next_path = "/run"
-    if not _auth_password() or not hmac.compare_digest(password, _auth_password()):
-        return _login_page(next_path, "密码不正确")
-    response = RedirectResponse(next_path, status_code=303)
-    response.set_cookie(
-        _auth_cookie_name(),
-        _make_auth_token(),
-        max_age=_auth_cookie_max_age(),
-        httponly=True,
-        secure=_auth_cookie_secure(request),
-        samesite="lax",
-    )
-    return response
+    # The main password grants owner access; the openview password grants
+    # read+comment (openview) access — same real UI, different cookie.
+    if _auth_password() and hmac.compare_digest(password, _auth_password()):
+        response = RedirectResponse(next_path, status_code=303)
+        response.set_cookie(
+            _auth_cookie_name(), _make_auth_token(),
+            max_age=_auth_cookie_max_age(), httponly=True,
+            secure=_auth_cookie_secure(request), samesite="lax",
+        )
+        return response
+    if _openview_password() and hmac.compare_digest(password, _openview_password()):
+        response = RedirectResponse(next_path, status_code=303)
+        response.set_cookie(
+            _openview_cookie_name(), _make_openview_token(),
+            max_age=_auth_cookie_max_age(), httponly=True,
+            secure=_auth_cookie_secure(request), samesite="lax",
+        )
+        return response
+    return _login_page(next_path, "密码不正确")
 
 
 @app.get("/logout")
 def logout():
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(_auth_cookie_name())
+    response.delete_cookie(_openview_cookie_name())
     return response
 
 
@@ -358,6 +442,333 @@ class VoiceNoteUpdate(BaseModel):
 
 
 # ─────────────────────────────────────────────
+# OpenView — real app behind a share password + free-position comments + change log
+# ─────────────────────────────────────────────
+
+class OpenCommentIn(BaseModel):
+    page: str = "/"
+    text: str
+    x: float = 0.0            # document coords (fallback anchor)
+    y: float = 0.0
+    anchor: str = ""          # CSS selector to re-find the target element
+    anchor_text: str = ""     # snippet of what the comment is on
+
+
+def _open_comments_dir() -> str:
+    base = os.path.join(os.path.expanduser("~"), "ELN_Data", "open_comments")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def _open_comments_file() -> str:
+    return os.path.join(_open_comments_dir(), "comments.jsonl")
+
+
+def _read_open_comments() -> list:
+    path = _open_comments_file()
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                out.append(item)
+    return out
+
+
+def _append_open_comment(item: dict) -> dict:
+    with open(_open_comments_file(), "a", encoding="utf-8") as f:
+        f.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
+    return item
+
+
+def _rewrite_open_comments(items: list) -> None:
+    with open(_open_comments_file(), "w", encoding="utf-8") as f:
+        for it in items:
+            f.write(json.dumps(it, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def _norm_page(page: str) -> str:
+    page = (page or "/").strip()
+    if not page.startswith("/"):
+        page = "/"
+    return page[:300]
+
+
+# ---- change log (openview edits) ----
+
+def _open_changes_file() -> str:
+    base = os.path.join(os.path.expanduser("~"), "ELN_Data", "open_changes")
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, "changes.jsonl")
+
+
+def _read_open_changes() -> list:
+    path = _open_changes_file()
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return out
+
+
+def _append_open_change(item: dict) -> None:
+    with open(_open_changes_file(), "a", encoding="utf-8") as f:
+        f.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def _summarize_change(method: str, path: str, body_bytes: bytes) -> str:
+    try:
+        data = json.loads(body_bytes or b"{}")
+    except Exception:
+        data = {}
+    m = re.match(r"^/api/steps/(\d+)$", path)
+    if m and method == "PATCH":
+        step = db_ops.get_step(int(m.group(1)))
+        ctx = ""
+        if step:
+            exp = db_ops.get_experiment(step.experiment_id)
+            ctx = (f"{exp.name if exp else ''} · 第{step.step_index + 1}步 {step.title}").strip(" ·")
+        parts = []
+        if "values_json" in data:
+            parts.append("字段/备注")
+        if "fields_json" in data:
+            parts.append("字段定义")
+        if "photo_paths" in data or "photo_pending" in data:
+            parts.append("附件")
+        return f"改了步骤（{ctx}）：{'、'.join(parts) or '内容'}"
+    if re.match(r"^/api/steps/(\d+)/complete$", path):
+        return "把某一步标记为完成"
+    if path == "/api/inbox" and method == "POST":
+        return "新增了一条速记"
+    m = re.match(r"^/api/inbox/(\d+)", path)
+    if m:
+        return (f"删除了速记 #{m.group(1)}" if method == "DELETE" else f"改动了速记 #{m.group(1)}")
+    if path == "/api/experiments" and method == "POST":
+        return (f"新建了实验：{data.get('name', '')}").rstrip("：")
+    m = re.match(r"^/api/experiments/(\d+)$", path)
+    if m:
+        return (f"删除了实验 #{m.group(1)}" if method == "DELETE" else f"改了实验 #{m.group(1)} 的信息")
+    return f"{method} {path}"
+
+
+def _log_openview_change(request: Request, path: str, body_bytes: bytes) -> None:
+    ip = _client_ip(request)
+    _append_open_change({
+        "id": uuid.uuid4().hex,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "ip": ip,
+        "name": _ip_nickname(ip),
+        "method": request.method,
+        "path": path,
+        "summary": _summarize_change(request.method, path, body_bytes),
+    })
+
+
+# ---- openview login entry ----
+
+@app.get("/openview", response_class=HTMLResponse)
+def openview_login_form(next: str = Query("/run")):
+    if not _openview_password():
+        return _html_response("<body><main style='padding:30px'><h1>OpenView 未启用</h1>"
+                              "<p>请在电脑端设置环境变量 ELN_OPENVIEW_PASSWORD 后重启。</p></main></body>")
+    if not next.startswith("/"):
+        next = "/run"
+    head = web_ui.page_head("ELN 查看与评论", _LOGIN_CSS)
+    return _html_response(f"""
+{head}
+<body>
+  <main>
+    <h1>ELN · 查看与评论</h1>
+    <p class="sub">输入分享密码进入（可浏览、可留言评论）</p>
+    <form method="post" action="/openview/login">
+      <input type="hidden" name="next" value="{_html_escape(next)}" />
+      <label for="password">分享密码</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" autofocus />
+      <button type="submit">进入</button>
+    </form>
+    <p class="hint">这是查看/评论用的公开入口，密码和主人的不同。进入后点右下角「评论」即可在任意位置留言。</p>
+  </main>
+</body>
+</html>
+""")
+
+
+@app.post("/openview/login", response_class=HTMLResponse)
+async def openview_login_submit(request: Request):
+    body = (await request.body()).decode("utf-8", errors="replace")
+    parsed = parse_qs(body, keep_blank_values=True)
+    password = parsed.get("password", [""])[0]
+    next_path = parsed.get("next", ["/run"])[0] or "/run"
+    if not next_path.startswith("/"):
+        next_path = "/run"
+    if not _openview_password() or not hmac.compare_digest(password, _openview_password()):
+        head = web_ui.page_head("ELN 查看与评论", _LOGIN_CSS)
+        return _html_response(f"""{head}<body><main><h1>ELN · 查看与评论</h1>
+        <p class="error">密码不正确</p>
+        <form method="post" action="/openview/login">
+          <input type="hidden" name="next" value="{_html_escape(next_path)}" />
+          <label for="password">分享密码</label>
+          <input id="password" name="password" type="password" autofocus />
+          <button type="submit">进入</button>
+        </form></main></body></html>""")
+    response = RedirectResponse(next_path, status_code=303)
+    response.set_cookie(
+        _openview_cookie_name(), _make_openview_token(),
+        max_age=_auth_cookie_max_age(), httponly=True,
+        secure=_auth_cookie_secure(request), samesite="lax",
+    )
+    return response
+
+
+@app.get("/openview/logout")
+def openview_logout():
+    response = RedirectResponse("/openview", status_code=303)
+    response.delete_cookie(_openview_cookie_name())
+    return response
+
+
+@app.get("/api/openview/whoami")
+def openview_whoami(request: Request):
+    main_ok = bool(_auth_password()) and _valid_auth_token(request.cookies.get(_auth_cookie_name(), ""))
+    open_ok = _valid_openview_token(request.cookies.get(_openview_cookie_name(), ""))
+    if main_ok or _is_local_direct(request):
+        return {"mode": "owner", "name": "我", "can_comment": True}
+    if open_ok:
+        return {"mode": "openview", "name": _ip_nickname(_client_ip(request)), "can_comment": True}
+    return {"mode": "none", "name": "", "can_comment": False}
+
+
+# ---- comments API ----
+
+@app.get("/api/openview/comments")
+def list_open_comments(page: Optional[str] = Query(None)):
+    items = [c for c in _read_open_comments() if c.get("v") == 2]
+    if page is not None:
+        p = _norm_page(page)
+        items = [c for c in items if c.get("page") == p]
+    return sorted(items, key=lambda c: str(c.get("created_at", "")))
+
+
+@app.post("/api/openview/comments", status_code=201)
+def create_open_comment(body: OpenCommentIn, request: Request):
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(400, "评论内容不能为空")
+    mode = getattr(request.state, "mode", "none")
+    if mode not in ("owner", "openview"):
+        raise HTTPException(403, "无权评论")
+    ip = _client_ip(request)
+    return _append_open_comment({
+        "v": 2,
+        "id": uuid.uuid4().hex,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "page": _norm_page(body.page),
+        "x": float(body.x or 0.0),
+        "y": float(body.y or 0.0),
+        "anchor": (body.anchor or "")[:400],
+        "anchor_text": (body.anchor_text or "")[:160],
+        "text": text[:4000],
+        "author": ("我" if mode == "owner" else _ip_nickname(ip)),
+        "ip": ip,
+        "mode": mode,
+    })
+
+
+@app.delete("/api/openview/comments/{comment_id}", status_code=204)
+def delete_open_comment(comment_id: str, request: Request):
+    if getattr(request.state, "mode", "none") != "owner":
+        raise HTTPException(403, "只有主人能删除评论")
+    items = _read_open_comments()
+    kept = [c for c in items if c.get("id") != comment_id]
+    if len(kept) != len(items):
+        _rewrite_open_comments(kept)
+
+
+# ---- change log API + owner page ----
+
+@app.get("/api/openview/changes")
+def list_open_changes(request: Request):
+    if getattr(request.state, "mode", "none") != "owner":
+        raise HTTPException(403, "仅主人可见")
+    return sorted(_read_open_changes(), key=lambda c: str(c.get("created_at", "")), reverse=True)
+
+
+_CHANGES_CSS_EXTRA = """
+    main { max-width:760px; }
+    .chg { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
+    .chg .w { font-weight:600; font-size:14.5px; overflow-wrap:anywhere; }
+    .chg .m { color:var(--muted); font-size:12.5px; margin-top:4px; }
+    .who { display:inline-block; font-size:11.5px; font-weight:600; padding:1px 8px; border-radius:999px; background:var(--clay-soft); color:var(--clay-ink); }
+    .empty { text-align:center; color:var(--muted); padding:44px 0; }
+"""
+
+
+@app.get("/changes", response_class=HTMLResponse)
+def changes_page(request: Request):
+    body = f"""
+<body>
+  <header class="app-bar"><h1>改动记录</h1>
+    <button class="icon-btn" onclick="load()" title="刷新">{web_ui.icon('refresh', 18)}</button>
+  </header>
+  <main>
+    <div class="small" style="margin:2px 2px 12px">这里列出通过 openview（分享入口）对实验数据做的改动，最新在上。</div>
+    <div id="list"><div class="small">加载中…</div></div>
+  </main>
+{_bottom_nav("more", "/")}
+<script>
+function esc(v){{ return String(v ?? "").replace(/[&<>"']/g, s => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[s])); }}
+async function load(){{
+  let xs = [];
+  try {{ const r = await fetch("/api/openview/changes"); if(r.ok) xs = await r.json(); }} catch {{}}
+  const box = document.getElementById("list");
+  if(!xs.length){{ box.innerHTML = '<div class="empty">还没有来自 openview 的改动。</div>'; return; }}
+  box.innerHTML = xs.map(c => {{
+    const t = c.created_at ? new Date(c.created_at).toLocaleString() : "";
+    return `<div class="chg"><div class="w">${{esc(c.summary || (c.method + " " + c.path))}}</div>
+      <div class="m"><span class="who">${{esc(c.name || "访客")}}</span> · ${{t}} · ${{esc(c.ip || "")}}</div></div>`;
+  }}).join("");
+}}
+load();
+</script>
+</body>
+</html>"""
+    return _html_response(web_ui.page_head("改动记录 · ELN", _NAV_CSS + _CHANGES_CSS_EXTRA) + body,
+                          headers={"Cache-Control": "no-store, max-age=0"})
+
+
+# ---- comment overlay (injected into every page) ----
+
+_OVERLAY_JS_PATH = os.path.join(os.path.dirname(__file__), "openview_overlay.js")
+
+
+@app.get("/openview/overlay.js")
+def openview_overlay_js():
+    try:
+        with open(_OVERLAY_JS_PATH, "r", encoding="utf-8") as f:
+            js = f.read()
+    except Exception:
+        js = "/* overlay unavailable */"
+    return Response(content=js, media_type="application/javascript",
+                    headers={"Cache-Control": "no-store, max-age=0"})
+
+
+# ─────────────────────────────────────────────
 # Health check
 # ─────────────────────────────────────────────
 
@@ -417,6 +828,7 @@ _CAPTURE_CSS = _NAV_CSS + """
     main { max-width:720px; }
     .cap-card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
       padding:16px; box-shadow:var(--shadow); }
+    .cap-card.drop-on { border-color:var(--clay); box-shadow:0 0 0 3px rgba(189,91,61,.12) inset; }
     #capText { min-height:120px; font-size:16px; }
     .exp-pick { margin-bottom:12px; }
     .exp-pick label { display:block; margin-bottom:5px; }
@@ -430,6 +842,11 @@ _CAPTURE_CSS = _NAV_CSS + """
     .cap-tools { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
     .cap-tools .button, .cap-tools button { min-height:44px; flex:1; }
     .thumb.ph { display:flex; align-items:center; justify-content:center; color:var(--faint); }
+    .file-chip { display:flex; align-items:center; gap:8px; max-width:100%; min-height:44px;
+      border:1px solid var(--line); border-radius:10px; background:#fbfaf7; padding:7px 34px 7px 10px;
+      position:relative; color:var(--muted); font-size:13px; overflow:hidden; }
+    .file-chip .fn { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); }
+    .file-chip .rm { position:absolute; top:5px; right:5px; width:22px; height:22px; min-height:0; }
     input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
     #micState { min-height:20px; color:var(--clay-ink); font-size:14px; margin-top:8px; }
     #capMic.rec { background:var(--clay); border-color:var(--clay); color:#fff; }
@@ -489,6 +906,7 @@ __NAV__
 <script>
 __ICON_JS__
 const heldImages = [];   // File objects not yet uploaded
+const heldFiles = [];    // Non-image File objects not yet uploaded
 const heldAudio = { blob: null };
 const capVoice = { rec: null, recognizing: false, mr: null, chunks: [] };
 
@@ -514,17 +932,80 @@ async function loadExperiments(){
 function renderThumbs(){
   const box = document.getElementById("thumbs");
   const x = svgIcon("x", 13);
-  box.innerHTML = heldImages.map((f, i) =>
+  const imageHtml = heldImages.map((f, i) =>
     `<span class="thumb"><img src="${URL.createObjectURL(f)}" /><button class="rm" onclick="rmImage(${i})">${x}</button></span>`
-  ).join("") + (heldAudio.blob ? `<span class="thumb" style="display:flex;align-items:center;justify-content:center;color:var(--muted)">${svgIcon("audio",24)}<button class="rm" onclick="rmAudio()">${x}</button></span>` : "");
+  ).join("");
+  const fileHtml = heldFiles.map((f, i) =>
+    `<span class="file-chip" title="${esc(f.name || "未命名文件")}">${svgIcon("clipboard",18)}<span class="fn">${esc(f.name || "未命名文件")}</span><button class="rm" onclick="rmFile(${i})">${x}</button></span>`
+  ).join("");
+  const audioHtml = heldAudio.blob ? `<span class="thumb" style="display:flex;align-items:center;justify-content:center;color:var(--muted)">${svgIcon("audio",24)}<button class="rm" onclick="rmAudio()">${x}</button></span>` : "";
+  box.innerHTML = imageHtml + fileHtml + audioHtml;
 }
 function addImages(input){
-  for(const f of input.files) heldImages.push(f);
+  for(const f of input.files) addHeldFile(f);
   input.value = "";
   renderThumbs();
 }
+function addHeldFile(file){
+  if(!file) return;
+  if((file.type || "").startsWith("image/")) heldImages.push(file);
+  else heldFiles.push(file);
+}
 function rmImage(i){ heldImages.splice(i,1); renderThumbs(); }
+function rmFile(i){ heldFiles.splice(i,1); renderThumbs(); }
 function rmAudio(){ heldAudio.blob = null; renderThumbs(); }
+
+async function handleCapPaste(event){
+  const ta = document.getElementById("capText");
+  if(document.activeElement !== ta) return;
+  const files = Array.from(event.clipboardData?.files || []);
+  if(!files.length){
+    const items = Array.from(event.clipboardData?.items || []);
+    for(const item of items){
+      if(item.kind === "file"){
+        const f = item.getAsFile();
+        if(f) files.push(f);
+      }
+    }
+  }
+  if(!files.length) return;
+  event.preventDefault();
+  files.forEach(addHeldFile);
+  renderThumbs();
+  const imageCount = files.filter(f => (f.type || "").startsWith("image/")).length;
+  const fileCount = files.length - imageCount;
+  const parts = [];
+  if(imageCount) parts.push(`${imageCount} 张图片`);
+  if(fileCount) parts.push(`${fileCount} 个文件`);
+  document.getElementById("capHint").textContent = `已从剪贴板加入 ${parts.join("、")}，打包存档时会一起上传。`;
+}
+
+function handleCapDragOver(event){
+  const dt = event.dataTransfer;
+  if(!dt || !Array.from(dt.types || []).includes("Files")) return;
+  event.preventDefault();
+  document.querySelector(".cap-card")?.classList.add("drop-on");
+}
+
+function handleCapDragLeave(event){
+  const card = document.querySelector(".cap-card");
+  if(card && !card.contains(event.relatedTarget)) card.classList.remove("drop-on");
+}
+
+function handleCapDrop(event){
+  const files = Array.from(event.dataTransfer?.files || []);
+  if(!files.length) return;
+  event.preventDefault();
+  document.querySelector(".cap-card")?.classList.remove("drop-on");
+  files.forEach(addHeldFile);
+  renderThumbs();
+  const imageCount = files.filter(f => (f.type || "").startsWith("image/")).length;
+  const fileCount = files.length - imageCount;
+  const parts = [];
+  if(imageCount) parts.push(`${imageCount} 张图片`);
+  if(fileCount) parts.push(`${fileCount} 个文件`);
+  document.getElementById("capHint").textContent = `已加入 ${parts.join("、")}，打包存档时会一起上传。`;
+}
 
 function speechSupported(){ return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
 
@@ -578,7 +1059,7 @@ function stopCapMic(){
 async function archive(){
   stopCapMic();
   const text = document.getElementById("capText").value.trim();
-  if(!text && !heldImages.length && !heldAudio.blob){ document.getElementById("capHint").textContent="先说点什么、拍张照，或打段字。"; return; }
+  if(!text && !heldImages.length && !heldFiles.length && !heldAudio.blob){ document.getElementById("capHint").textContent="先说点什么、拍张照，粘贴文件，或打段字。"; return; }
   const btn = document.getElementById("archiveBtn");
   btn.disabled = true; document.getElementById("capHint").textContent = "存档中…";
   try {
@@ -586,6 +1067,10 @@ async function archive(){
     const entry = await api("/api/inbox", {method:"POST", body: JSON.stringify({text, hinted_experiment_id: hint ? Number(hint) : null})});
     for(const f of heldImages){
       const fd = new FormData(); fd.append("file", f); fd.append("kind", "image");
+      await fetch(`/api/inbox/${entry.id}/media`, {method:"POST", body:fd});
+    }
+    for(const f of heldFiles){
+      const fd = new FormData(); fd.append("file", f); fd.append("kind", "file");
       await fetch(`/api/inbox/${entry.id}/media`, {method:"POST", body:fd});
     }
     if(heldAudio.blob){
@@ -596,7 +1081,7 @@ async function archive(){
       await fetch(`/api/inbox/${entry.id}/media`, {method:"POST", body:fd});
     }
     document.getElementById("capText").value = "";
-    heldImages.length = 0; heldAudio.blob = null; renderThumbs();
+    heldImages.length = 0; heldFiles.length = 0; heldAudio.blob = null; renderThumbs();
     document.getElementById("capHint").textContent = "已存进收件箱";
     setTimeout(()=>{ document.getElementById("capHint").textContent=""; }, 2500);
     loadPending();
@@ -613,16 +1098,20 @@ async function loadPending(){
     const box = document.getElementById("pendingList");
     if(!items.length){ box.innerHTML = '<div class="small" style="padding:0 2px">还没有待归档的速记。</div>'; return; }
     box.innerHTML = items.map(it => {
+      const firstFile = it.file_urls && it.file_urls[0];
       const thumb = it.image_urls && it.image_urls[0]
         ? `<span class="thumb edit-thumb" onclick="openPendingEdit(${it.id})" role="button" title="修改识别文字" aria-label="修改识别文字"><img src="${esc(it.image_urls[0])}"></span>`
-        : `<span class="thumb ph edit-thumb" onclick="openPendingEdit(${it.id})" role="button" title="修改识别文字" aria-label="修改识别文字">${svgIcon(it.audio_url && !it.text ? "audio" : "note", 20)}</span>`;
+        : `<span class="thumb ph edit-thumb" onclick="openPendingEdit(${it.id})" role="button" title="修改识别文字" aria-label="修改识别文字">${svgIcon(firstFile ? "clipboard" : (it.audio_url && !it.text ? "audio" : "note"), 20)}</span>`;
       const t = new Date(it.created_at); const hh = String(t.getHours()).padStart(2,"0")+":"+String(t.getMinutes()).padStart(2,"0");
-      const body = it.text ? esc(it.text) : (it.audio_url ? "语音待识别或未识别到文字" : "图片");
+      const fileText = firstFile ? `文件：${esc(firstFile.name || "未命名文件")}` : "";
+      const body = it.text ? esc(it.text) : (it.audio_url ? "语音待识别或未识别到文字" : (fileText || "图片"));
+      const fileLinks = (it.file_urls || []).map(f => `<a href="${esc(f.url)}" target="_blank" rel="noopener">${svgIcon("clipboard",14)} ${esc(f.name || "文件")}</a>`).join(" ");
       const raw = esc(it.text || "");
       return `<div class="pending-item" id="pending-${it.id}">
         ${thumb}
         <div class="pt">
           <div id="pending-text-${it.id}">${body}</div>
+          ${fileLinks ? `<div class="pm">${fileLinks}</div>` : ""}
           <div class="pm">${hh}${it.hinted_experiment_id?" · 已标实验":""}</div>
           <div class="pending-edit" id="pending-edit-${it.id}">
             <textarea id="pending-raw-${it.id}" placeholder="修改识别文字">${raw}</textarea>
@@ -658,7 +1147,7 @@ async function savePendingText(id){
     if(st) st.textContent = "保存中…";
     const updated = await api(`/api/inbox/${id}`, {method:"PATCH", body: JSON.stringify({text: ta.value})});
     const textNode = document.getElementById("pending-text-"+id);
-    if(textNode) textNode.textContent = updated.text || (updated.audio_url ? "语音待识别或未识别到文字" : "图片");
+    if(textNode) textNode.textContent = updated.text || (updated.audio_url ? "语音待识别或未识别到文字" : (updated.file_urls && updated.file_urls[0] ? "文件：" + updated.file_urls[0].name : "图片"));
     if(st) st.textContent = "已保存";
     setTimeout(() => closePendingEdit(id), 700);
   } catch(e){
@@ -667,6 +1156,13 @@ async function savePendingText(id){
 }
 
 loadExperiments();
+document.getElementById("capText").addEventListener("paste", handleCapPaste);
+const capCard = document.querySelector(".cap-card");
+if(capCard){
+  capCard.addEventListener("dragover", handleCapDragOver);
+  capCard.addEventListener("dragleave", handleCapDragLeave);
+  capCard.addEventListener("drop", handleCapDrop);
+}
 loadPending();
 // refresh so background transcription text shows up; skip while editing a note
 setInterval(() => { if(!document.querySelector(".pending-edit.open")) loadPending(); }, 12000);
@@ -951,6 +1447,7 @@ def more_page(request: Request):
     cards = [
         ("inbox", "inbox", "速记收件箱", "回看历史速记、听录音、看照片", "/inbox"),
         ("protocols", "flask", "协议库", "新建实验、导入或编辑协议", "/protocols"),
+        ("changes", "clock", "改动记录", "openview 访客改了什么、评论了什么", "/changes"),
         ("settings", "settings", "设置", "AI 归档、访问信息", "/settings"),
     ]
     rows = "".join(
@@ -1463,9 +1960,34 @@ _RUNNER_CSS = """
     }
     .md-chip:hover { color:var(--ink); background:#ebe8df; }
     .md-slot.has-md .md-chip { color:var(--clay-ink); background:var(--clay-soft); border-color:var(--clay-line); }
+    .md-preview { width:100%; border:1px solid var(--line); border-radius:10px; background:#fbfaf7; padding:10px 12px;
+      color:var(--ink); font-size:14px; line-height:1.6; overflow-wrap:anywhere; }
+    .md-preview.empty { color:var(--faint); font-size:13px; }
+    .md-preview :first-child { margin-top:0; }
+    .md-preview :last-child { margin-bottom:0; }
+    .md-preview pre { white-space:pre-wrap; word-break:break-word; background:#f4f1ea; border:1px solid var(--line); border-radius:8px; padding:8px; }
+    .md-preview code { background:#f0ede6; padding:1px 4px; border-radius:4px; }
+    .md-preview table { width:100%; border-collapse:collapse; margin:8px 0; font-size:13px; }
+    .md-preview th, .md-preview td { border:1px solid var(--line); padding:5px 7px; text-align:left; vertical-align:top; }
     .md-box { display:none; width:100%; }
-    .md-box.open { display:block; }
+    .md-slot.editing .md-box { display:block; }
+    .md-slot.editing .md-preview { display:none; }
     .md-box textarea { min-height:116px; font-family:ui-monospace, "SF Mono", Consolas, monospace; font-size:13.5px; }
+    .field-md { align-items:flex-start; }
+    .field-md .field-preview {
+      width:100%; min-height:40px; border:1px solid var(--line-strong); border-radius:var(--r);
+      background:#fff; padding:9px 12px; cursor:text; font-size:14.5px; line-height:1.55; overflow-wrap:anywhere;
+    }
+    .field-md .field-preview.empty { color:var(--faint); }
+    .field-md .field-preview :first-child { margin-top:0; }
+    .field-md .field-preview :last-child { margin-bottom:0; }
+    .field-md .field-preview pre { white-space:pre-wrap; word-break:break-word; background:#f4f1ea; border:1px solid var(--line); border-radius:8px; padding:8px; }
+    .field-md .field-preview code { background:#f0ede6; padding:1px 4px; border-radius:4px; }
+    .field-md .field-preview table { width:100%; border-collapse:collapse; margin:8px 0; font-size:13px; }
+    .field-md .field-preview th, .field-md .field-preview td { border:1px solid var(--line); padding:5px 7px; text-align:left; vertical-align:top; }
+    .field-md textarea { display:none; min-height:78px; font-size:14.5px; }
+    .field-md.editing .field-preview { display:none; }
+    .field-md.editing textarea { display:block; }
     .done { color:var(--green); font-weight:700; }
 
     .photo-row { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
@@ -2116,7 +2638,16 @@ function renderSteps(items){
       const opts = (f.options || []).map(o => `<option value="${esc(o)}" ${o==v?"selected":""}>${esc(o)}</option>`).join("");
       return `<div class="field"><label>${esc(f.label)}${f.required ? " *" : ""}</label><select data-step="${step.id}" data-key="${esc(f.key)}" onchange="saveDraft(${step.id})">${opts}</select></div>`;
     }
-    return `<div class="field"><label>${esc(f.label)}${f.required ? " *" : ""}</label><input data-step="${step.id}" data-key="${esc(f.key)}" value="${esc(v)}" oninput="saveDraft(${step.id})" /></div>`;
+    if(f.type === "number"){
+      return `<div class="field"><label>${esc(f.label)}${f.required ? " *" : ""}</label><input type="number" data-step="${step.id}" data-key="${esc(f.key)}" value="${esc(v)}" oninput="saveDraft(${step.id})" /></div>`;
+    }
+    const hasValue = String(v).trim().length > 0;
+    const keyArg = JSON.stringify(f.key);
+    return `<div class="field field-md ${hasValue ? "has-value" : ""}" data-field-step="${step.id}" data-field-key="${esc(f.key)}">
+      <label>${esc(f.label)}${f.required ? " *" : ""}</label>
+      <div class="field-preview ${hasValue ? "" : "empty"}" onclick='openFieldEdit(${step.id}, ${keyArg})'>${hasValue ? markdownToHtml(v) : "点击填写"}</div>
+      <textarea data-step="${step.id}" data-key="${esc(f.key)}" oninput='saveDraft(${step.id}); updateFieldPreview(${step.id}, ${keyArg})' onblur='closeFieldEdit(${step.id}, ${keyArg})' placeholder="${esc(f.label)}">${esc(v)}</textarea>
+    </div>`;
   }).join("");
   const notesValue = vals[STEP_NOTES_KEY] || "";
   const hasMdNote = String(notesValue).trim().length > 0;
@@ -2125,7 +2656,8 @@ function renderSteps(items){
       <div class="md-line">
         <button type="button" class="md-chip" onclick="toggleMdSlot(${step.id})" title="输入或修改 Markdown 记录">md</button>
       </div>
-      <div class="md-box ${hasMdNote ? "open" : ""}" id="md-box-${step.id}">
+      <div class="md-preview ${hasMdNote ? "" : "empty"}" id="md-preview-${step.id}">${hasMdNote ? markdownToHtml(notesValue) : "暂无 Markdown 记录。点击 md 后可编辑。"}</div>
+      <div class="md-box" id="md-box-${step.id}">
         <textarea data-step="${step.id}" data-key="${STEP_NOTES_KEY}" oninput="saveDraft(${step.id}); updateMdSlot(${step.id})" placeholder="Markdown 记录；报告中会按 Markdown 渲染">${esc(notesValue)}</textarea>
         <div class="small">支持 Markdown。适合放观察、异常、解释、AI 整理结果；数字和短字段仍填上面的结构化字段。</div>
       </div>
@@ -2233,28 +2765,73 @@ function collectValues(stepId){
 function saveDraft(stepId){ localStorage.setItem(draftKey(stepId), JSON.stringify(collectValues(stepId))); }
 function status(stepId, text){ const el=document.getElementById("status-"+stepId); if(el) el.textContent=text; }
 
+function fieldSlot(stepId, key){
+  return Array.from(document.querySelectorAll(`[data-field-step="${stepId}"]`))
+    .find(el => el.dataset.fieldKey === String(key)) || null;
+}
+
+function fieldTextarea(stepId, key){
+  const slot = fieldSlot(stepId, key);
+  return slot ? slot.querySelector("textarea") : null;
+}
+
+function openFieldEdit(stepId, key){
+  const slot = fieldSlot(stepId, key);
+  const ta = fieldTextarea(stepId, key);
+  if(!slot || !ta) return;
+  slot.classList.add("editing");
+  setTimeout(() => {
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = ta.value.length;
+  }, 20);
+}
+
+function closeFieldEdit(stepId, key){
+  updateFieldPreview(stepId, key);
+  const slot = fieldSlot(stepId, key);
+  if(slot) slot.classList.remove("editing");
+}
+
+function updateFieldPreview(stepId, key){
+  const slot = fieldSlot(stepId, key);
+  const ta = fieldTextarea(stepId, key);
+  const preview = slot ? slot.querySelector(".field-preview") : null;
+  if(!slot || !ta || !preview) return;
+  const hasText = !!ta.value.trim();
+  slot.classList.toggle("has-value", hasText);
+  preview.classList.toggle("empty", !hasText);
+  preview.innerHTML = hasText ? markdownToHtml(ta.value) : "点击填写";
+}
+
 function mdTextarea(stepId){
   return document.querySelector(`textarea[data-step="${stepId}"][data-key="${STEP_NOTES_KEY}"]`);
 }
 
 function toggleMdSlot(stepId){
-  const box = document.getElementById("md-box-" + stepId);
+  const slot = document.getElementById("md-slot-" + stepId);
   const ta = mdTextarea(stepId);
-  if(!box) return;
-  box.classList.toggle("open");
-  if(box.classList.contains("open") && ta){
+  if(!slot) return;
+  slot.classList.toggle("editing");
+  if(slot.classList.contains("editing") && ta){
     setTimeout(() => {
       ta.focus();
       ta.selectionStart = ta.selectionEnd = ta.value.length;
     }, 30);
+  } else {
+    updateMdSlot(stepId);
   }
 }
 
 function updateMdSlot(stepId){
   const ta = mdTextarea(stepId);
   const slot = document.getElementById("md-slot-" + stepId);
+  const preview = document.getElementById("md-preview-" + stepId);
   const hasText = !!(ta && ta.value.trim());
   if(slot) slot.classList.toggle("has-md", hasText);
+  if(preview){
+    preview.classList.toggle("empty", !hasText);
+    preview.innerHTML = hasText ? markdownToHtml(ta.value) : "暂无 Markdown 记录。点击 md 后可编辑。";
+  }
 }
 
 function renderDescription(step){
@@ -3802,10 +4379,31 @@ class InboxFiled(BaseModel):
 
 def _inbox_to_dict(entry: dict) -> dict:
     d = dict(entry)
-    d["image_urls"] = ["/photos/" + str(p).replace("\\", "/") for p in d.get("image_paths", [])]
+    image_urls = []
+    file_urls = []
+    for path in d.get("image_paths", []):
+        clean = str(path).replace("\\", "/")
+        name = os.path.basename(clean)
+        url = "/photos/" + clean
+        ext = os.path.splitext(name.lower())[1]
+        if ext in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"}:
+            image_urls.append(url)
+        else:
+            file_urls.append({"url": url, "name": name or clean})
+    d["image_urls"] = image_urls
+    d["file_urls"] = file_urls
     if d.get("audio_path"):
         d["audio_url"] = _audio_url(str(d["audio_path"]))
     return d
+
+
+def _safe_upload_name(name: str, fallback: str) -> str:
+    raw = os.path.basename(str(name or "").replace("\\", "/")).strip()
+    if not raw:
+        raw = fallback
+    cleaned = "".join(ch if ch not in '<>:"/\\|?*\x00' else "_" for ch in raw)
+    cleaned = cleaned.strip(" .")
+    return (cleaned or fallback)[:160]
 
 
 @app.get("/api/inbox")
@@ -3856,7 +4454,12 @@ async def upload_inbox_media(
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     default_ext = ".m4a" if kind == "audio" else ".jpg"
     ext = os.path.splitext(file.filename or ("a" + default_ext))[1] or default_ext
-    filename = f"{kind}_{ts}{ext}"
+    if kind == "file":
+        original = _safe_upload_name(file.filename or f"clipboard_file{ext}", f"clipboard_file{ext}")
+        stem, original_ext = os.path.splitext(original)
+        filename = f"{stem}_{ts}{original_ext or ext}"
+    else:
+        filename = f"{kind}_{ts}{ext}"
     filepath = os.path.join(sub_dir, filename)
     with open(filepath, "wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -3932,7 +4535,10 @@ def apply_inbox(entry_id: int, body: InboxApply):
     # attach captured images to the step
     if body.attach_images:
         for i, rel in enumerate(entry.get("image_paths", []), 1):
-            db_ops.add_photo_to_step(step_id, rel, f"速记图 {i}")
+            name = os.path.basename(str(rel).replace("\\", "/"))
+            ext = os.path.splitext(name.lower())[1]
+            label = f"速记图 {i}" if ext in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"} else (name or f"速记附件 {i}")
+            db_ops.add_photo_to_step(step_id, rel, label)
 
     db_ops.update_inbox_entry(
         entry_id, status="filed",
