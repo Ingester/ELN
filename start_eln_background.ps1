@@ -11,7 +11,7 @@ $ErrorActionPreference = "SilentlyContinue"
 
 $repo   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $python = "C:\Users\Ingester\mambaforge\envs\py310\python.exe"
-$url    = "http://127.0.0.1:8550/"
+$url    = "http://127.0.0.1:8600/run"
 $logDir = Join-Path $repo "logs"
 
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -29,12 +29,10 @@ function Test-PortListening([int]$port) {
     } catch { return $false }
 }
 
-if (-not ((Test-PortListening 8550) -and (Test-PortListening 8600))) {
-    $env:ELN_WEB_HOST = "0.0.0.0"   # LAN access for the phone
-    $env:ELN_WEB_PORT = "8550"
-    $env:ELN_API_HOST = "0.0.0.0"
-    $env:ELN_API_PORT = "8600"
-    $env:ELN_WEB_OPEN = "0"
+if (-not (Test-PortListening 8600)) {
+    $env:ELN_API_HOST   = "0.0.0.0"   # LAN access for the phone
+    $env:ELN_API_PORT   = "8600"
+    $env:ELN_NATIVE_ONLY = "1"        # native 8600 pages only; no Flet on 8550
     Start-Process -FilePath $python -ArgumentList "run_web.py" `
         -WorkingDirectory $repo -WindowStyle Hidden `
         -RedirectStandardOutput (Join-Path $logDir "eln_bg_out.log") `
@@ -42,7 +40,7 @@ if (-not ((Test-PortListening 8550) -and (Test-PortListening 8600))) {
 
     for ($i = 0; $i -lt 25; $i++) {
         Start-Sleep -Seconds 1
-        if ((Test-PortListening 8550) -and (Test-PortListening 8600)) { break }
+        if (Test-PortListening 8600) { break }
     }
 }
 

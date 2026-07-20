@@ -5815,7 +5815,7 @@ def _render_markdown_html(markdown: str) -> str:
 
 def _eln_step_url(experiment_id: int, step_id: int) -> str:
     if os.environ.get("ELN_NATIVE_ONLY") == "1":
-        return f"/run?experiment_id={experiment_id}"
+        return f"/run?experiment_id={experiment_id}&step_id={step_id}"
     return f"{_web_base_url()}/stepper/{experiment_id}/{step_id}"
 
 

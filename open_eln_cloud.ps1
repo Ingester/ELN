@@ -20,7 +20,7 @@ if ($svc -and $svc.Status -ne "Running") {
 }
 
 # 2) 本地服务：没在跑就用后台启动脚本拉起（幂等）。
-if (-not ((Test-PortListening 8550) -and (Test-PortListening 8600))) {
+if (-not (Test-PortListening 8600)) {
     & (Join-Path $root "start_eln_background.ps1")
 }
 

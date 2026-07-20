@@ -75,6 +75,29 @@ def start_server(host: str = "0.0.0.0", port: int = None) -> None:
         logger.warning(f"voice worker not started: {exc}")
 
 
+def run_foreground(host: str = "0.0.0.0", port: int = None) -> None:
+    """Run the API server in the FOREGROUND (blocking). Used for native-only web
+    mode where there is no Flet shell to keep the process alive."""
+    if port is None:
+        port = get_api_port()
+
+    import db.database as db_ops
+    db_ops.init_db()
+
+    import uvicorn
+    from server.api import app, mount_photos
+    mount_photos(app)
+
+    try:
+        from server.voice import notify_new_audio
+        notify_new_audio()
+    except Exception as exc:
+        logger.warning(f"voice worker not started: {exc}")
+
+    logger.info(f"ELN API server (foreground) on http://{host}:{port}")
+    uvicorn.run(app, host=host, port=port, log_level="warning", access_log=False)
+
+
 def stop_server() -> None:
     """Signal uvicorn to shut down."""
     global _uvicorn_server
