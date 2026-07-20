@@ -89,11 +89,25 @@ def static_base_css():
                     headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
+# Prerender the bottom-nav destinations when the user hovers a tab, so switching
+# tabs activates an already-loaded page instantly. Ignored by browsers that don't
+# support the Speculation Rules API (they just navigate normally).
+_SPECRULES_TAG = (
+    '<script type="speculationrules">'
+    '{"prerender":[{"where":{"or":['
+    '{"href_matches":"/capture"},{"href_matches":"/run"},'
+    '{"href_matches":"/history"},{"href_matches":"/more"},'
+    '{"href_matches":"/inbox"}]},"eagerness":"moderate"}]}'
+    '</script>'
+)
+
+
 def _html_response(content: str, **kwargs) -> HTMLResponse:
-    """Return localized HTML for the native web pages, with the comment overlay injected."""
+    """Return localized HTML for the native web pages, with the comment overlay
+    and nav prerender hints injected."""
     html = localize_html(content)
     if "</body>" in html and "/openview/overlay.js" not in html:
-        html = html.replace("</body>", _OVERLAY_TAG + "\n</body>", 1)
+        html = html.replace("</body>", _OVERLAY_TAG + "\n" + _SPECRULES_TAG + "\n</body>", 1)
     return HTMLResponse(html, **kwargs)
 
 
