@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, quote, unquote
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1283,7 +1283,7 @@ async function loadPending(){
     box.innerHTML = items.map(it => {
       const firstFile = it.file_urls && it.file_urls[0];
       const thumb = it.image_urls && it.image_urls[0]
-        ? `<span class="thumb edit-thumb" onclick="openPendingEdit(${it.id})" role="button" title="修改识别文字" aria-label="修改识别文字"><img src="${esc(it.image_urls[0])}"></span>`
+        ? `<span class="thumb edit-thumb" onclick="openPendingEdit(${it.id})" role="button" title="修改识别文字" aria-label="修改识别文字"><img src="${esc(thumbFromUrl(it.image_urls[0],96))}" loading="lazy" onerror="this.onerror=null;this.src='${esc(it.image_urls[0])}'"></span>`
         : `<span class="thumb ph edit-thumb" onclick="openPendingEdit(${it.id})" role="button" title="修改识别文字" aria-label="修改识别文字">${svgIcon(firstFile ? "clipboard" : (it.audio_url && !it.text ? "audio" : "note"), 20)}</span>`;
       const t = new Date(it.created_at); const hh = String(t.getHours()).padStart(2,"0")+":"+String(t.getMinutes()).padStart(2,"0");
       const fileText = firstFile ? `文件：${esc(firstFile.name || "未命名文件")}` : "";
@@ -1541,7 +1541,7 @@ function renderEntry(it){
   el.className = "entry"; el.id = "entry-"+it.id;
   const t = new Date(it.created_at);
   const stamp = t.toLocaleString();
-  const media = (it.image_urls||[]).map(u => `<a href="${esc(u)}" target="_blank"><img src="${esc(u)}"></a>`).join("");
+  const media = (it.image_urls||[]).map(u => `<a href="${esc(u)}" target="_blank"><img src="${esc(thumbFromUrl(u,220))}" loading="lazy" onerror="this.onerror=null;this.src='${esc(u)}'"></a>`).join("");
   const audio = it.audio_url ? `<audio controls preload="none" src="${esc(it.audio_url)}"></audio>` : "";
   const bodyText = it.text ? esc(it.text) : (it.audio_url ? "<i>语音，尚未转写</i>" : "<i>（无文字）</i>");
 
@@ -2752,10 +2752,11 @@ function renderAttachments(step, attachments){
       data-step-id="${step.id}" data-path="${esc(item.path)}" data-name="${esc(item.name)}"
       onclick="renameAttachment(this)">${svgIcon("pencil",15)}</button>`;
     if(isImageAttachment(item.path)){
-      const disp = displayUrl(item.path);   // TIFF/BMP → server-rendered PNG preview
+      const disp = displayUrl(item.path);   // full-size (original or PNG preview) for opening
+      const thumb = thumbUrl(item.path, 400);
       return `<span class="attachment-item image">
-        <a class="attachment-preview" href="${esc(disp)}" target="_blank" rel="noopener" title="打开预览">
-          <img src="${esc(disp)}" alt="${esc(item.name)}" loading="lazy" />
+        <a class="attachment-preview" href="${esc(disp)}" target="_blank" rel="noopener" title="打开原图">
+          <img src="${esc(thumb)}" alt="${esc(item.name)}" loading="lazy" onerror="this.onerror=null;this.src='${esc(disp)}'" />
         </a>
         <span class="attachment-caption">
           <a href="${esc(url)}" target="_blank" rel="noopener" title="${esc(item.name)}（下载原图）">${esc(item.name)}</a>
@@ -2776,6 +2777,14 @@ function attachmentUrl(path){
 }
 
 function needsConvert(path){ return /\\.(tiff?|bmp)$/i.test(String(path || "")); }
+
+// Small cached thumbnail for previews (any raster image incl. TIFF). SVG renders
+// natively and is tiny, so use it as-is.
+function thumbUrl(path, w){
+  const clean = String(path || "").replace(/\\\\/g, "/").replace(/^\\/+/, "");
+  if(/\\.svg$/i.test(clean)) return attachmentUrl(path);
+  return "/api/thumb?path=" + encodeURIComponent(clean) + "&w=" + (w||360);
+}
 
 // URL to show in <img>: browsers can't render TIFF/BMP, so use the server PNG preview.
 function displayUrl(path){
@@ -5216,14 +5225,18 @@ def experiment_summaries(status: Optional[str] = Query("active,needs_wrapup")):
     ]
 
 
-@app.get("/api/preview")
-def image_preview(path: str = Query(...), max: int = Query(1600, ge=64, le=4096)):
-    """Render formats browsers can't show in <img> (TIFF, BMP) as PNG for preview.
-    Serves a downscaled PNG from the original file under the photos dir."""
-    try:
-        from PIL import Image
-    except Exception:
-        raise HTTPException(500, "Pillow 未安装，无法预览此格式")
+_RENDERABLE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
+_IMMUTABLE_CACHE = {"Cache-Control": "public, max-age=31536000, immutable"}
+
+
+def _thumbs_dir() -> str:
+    d = os.path.join(_photos_dir(), ".thumbs")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _resolve_photo(path: str) -> str:
+    """Resolve a photos-relative path safely to an absolute file under photos."""
     base = os.path.realpath(_photos_dir())
     clean = str(path).replace("\\", "/").lstrip("/")
     full = os.path.realpath(os.path.join(base, clean.replace("/", os.sep)))
@@ -5231,23 +5244,70 @@ def image_preview(path: str = Query(...), max: int = Query(1600, ge=64, le=4096)
         raise HTTPException(403, "非法路径")
     if not os.path.isfile(full):
         raise HTTPException(404, "文件不存在")
-    try:
-        with Image.open(full) as im:
-            try:
-                im.seek(0)  # first page of multi-page TIFF
-            except Exception:
-                pass
-            if im.mode not in ("RGB", "RGBA", "L"):
+    return full
+
+
+def _render_cached(full: str, max_px: int, fmt: str) -> str:
+    """Downscale `full` to <=max_px and cache the result on disk; return the
+    cache path. Keyed by source path + mtime + size + params, so an edited
+    original produces a fresh render. fmt is 'JPEG' or 'PNG'."""
+    from PIL import Image
+    st = os.stat(full)
+    ext = ".jpg" if fmt == "JPEG" else ".png"
+    key = hashlib.sha256(
+        f"{full}|{st.st_mtime_ns}|{st.st_size}|{max_px}|{fmt}".encode("utf-8")
+    ).hexdigest()[:24]
+    out = os.path.join(_thumbs_dir(), key + ext)
+    if os.path.exists(out) and os.path.getsize(out) > 0:
+        return out
+    with Image.open(full) as im:
+        try:
+            im.seek(0)  # first page of multi-page TIFF
+        except Exception:
+            pass
+        if fmt == "JPEG":
+            if im.mode not in ("RGB", "L"):
                 im = im.convert("RGB")
-            im.thumbnail((max, max))
-            buf = io.BytesIO()
-            im.save(buf, format="PNG")
+        elif im.mode not in ("RGB", "RGBA", "L"):
+            im = im.convert("RGB")
+        im.thumbnail((max_px, max_px))
+        tmp = out + ".tmp"
+        im.save(tmp, format=fmt, **({"quality": 82} if fmt == "JPEG" else {}))
+        os.replace(tmp, out)
+    return out
+
+
+@app.get("/api/thumb")
+def image_thumb(path: str = Query(...), w: int = Query(360, ge=48, le=1200)):
+    """Small cached JPEG thumbnail for list/grid views (any image incl. TIFF)."""
+    full = _resolve_photo(path)
+    if os.path.splitext(full)[1].lower() not in _RENDERABLE_EXT:
+        raise HTTPException(415, "不支持缩略图")
+    try:
+        out = _render_cached(full, w, "JPEG")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(415, f"无法生成缩略图：{exc}")
+    return FileResponse(out, media_type="image/jpeg", headers=_IMMUTABLE_CACHE)
+
+
+@app.get("/api/preview")
+def image_preview(path: str = Query(...), max: int = Query(1600, ge=64, le=4096)):
+    """Render formats browsers can't show in <img> (TIFF, BMP) as a PNG for a
+    full-size preview. Result is cached on disk so big TIFFs decode only once."""
+    try:
+        import PIL  # noqa: F401
+    except Exception:
+        raise HTTPException(500, "Pillow 未安装，无法预览此格式")
+    full = _resolve_photo(path)
+    try:
+        out = _render_cached(full, max, "PNG")
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(415, f"无法渲染此图片：{exc}")
-    return Response(content=buf.getvalue(), media_type="image/png",
-                    headers={"Cache-Control": "max-age=3600"})
+    return FileResponse(out, media_type="image/png", headers=_IMMUTABLE_CACHE)
 
 
 class AiOrganizeRequest(BaseModel):

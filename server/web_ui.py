@@ -59,7 +59,10 @@ def _icons_js() -> str:
     return "window.ELN_ICONS=" + json.dumps(ICONS) + ";\n" + (
         "function svgIcon(name,size){size=size||20;"
         "return '<svg class=\"icon\" width=\"'+size+'\" height=\"'+size+'\" "
-        "viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\">'+(window.ELN_ICONS[name]||'')+'</svg>';}"
+        "viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\">'+(window.ELN_ICONS[name]||'')+'</svg>';}\n"
+        # Cached thumbnail URL for a /photos/... url or a photos-relative path.
+        "function thumbFromUrl(u,w){var p=String(u||'');if(p.indexOf('/photos/')===0)p=p.slice(8);"
+        "p=p.replace(/^\\/+/,'');return '/api/thumb?path='+encodeURIComponent(p)+'&w='+(w||360);}"
     )
 
 
