@@ -847,6 +847,11 @@ _CAPTURE_CSS = _NAV_CSS + """
       position:relative; color:var(--muted); font-size:13px; overflow:hidden; }
     .file-chip .fn { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); }
     .file-chip .rm { position:absolute; top:5px; right:5px; width:22px; height:22px; min-height:0; }
+    .file-chip .file-main { min-width:0; flex:1; }
+    .file-chip .file-state { margin-top:2px; font-size:11.5px; color:var(--faint); white-space:nowrap; }
+    .file-chip .bar { height:3px; border-radius:999px; background:#ebe5db; overflow:hidden; margin-top:4px; }
+    .file-chip .bar span { display:block; height:100%; width:0%; background:var(--clay); }
+    .file-chip.error { border-color:#d9a89a; background:#fff6f2; }
     input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
     #micState { min-height:20px; color:var(--clay-ink); font-size:14px; margin-top:8px; }
     #capMic.rec { background:var(--clay); border-color:var(--clay); color:#fff; }
@@ -905,10 +910,11 @@ _CAPTURE_BODY = """
 __NAV__
 <script>
 __ICON_JS__
-const heldImages = [];   // File objects not yet uploaded
-const heldFiles = [];    // Non-image File objects not yet uploaded
+const heldImages = [];   // {file, kind, status, progress, staged}
+const heldFiles = [];    // {file, kind, status, progress, staged}
 const heldAudio = { blob: null };
 const capVoice = { rec: null, recognizing: false, mr: null, chunks: [] };
+const uploadState = { active: false };
 
 function esc(v){ return String(v ?? "").replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
 async function api(path, opts={}){
@@ -932,11 +938,20 @@ async function loadExperiments(){
 function renderThumbs(){
   const box = document.getElementById("thumbs");
   const x = svgIcon("x", 13);
-  const imageHtml = heldImages.map((f, i) =>
-    `<span class="thumb"><img src="${URL.createObjectURL(f)}" /><button class="rm" onclick="rmImage(${i})">${x}</button></span>`
+  const chipState = item => {
+    if(item.status === "uploading") return `上传中 ${Math.max(1, Math.round(item.progress || 0))}%`;
+    if(item.status === "done") return "已上传";
+    if(item.status === "error") return "失败：" + (item.error || "上传失败");
+    return formatBytes(item.file?.size || 0);
+  };
+  const progressBar = item => item.status === "uploading"
+    ? `<div class="bar"><span style="width:${Math.max(1, Math.round(item.progress || 0))}%"></span></div>`
+    : "";
+  const imageHtml = heldImages.map((item, i) =>
+    `<span class="thumb" title="${esc(item.file.name || "图片")}"><img src="${item.preview || URL.createObjectURL(item.file)}" /><button class="rm" onclick="rmImage(${i})">${x}</button></span>`
   ).join("");
-  const fileHtml = heldFiles.map((f, i) =>
-    `<span class="file-chip" title="${esc(f.name || "未命名文件")}">${svgIcon("clipboard",18)}<span class="fn">${esc(f.name || "未命名文件")}</span><button class="rm" onclick="rmFile(${i})">${x}</button></span>`
+  const fileHtml = heldFiles.map((item, i) =>
+    `<span class="file-chip ${item.status === "error" ? "error" : ""}" title="${esc(item.file.name || "未命名文件")}">${svgIcon("clipboard",18)}<span class="file-main"><span class="fn">${esc(item.file.name || "未命名文件")}</span><span class="file-state">${esc(chipState(item))}</span>${progressBar(item)}</span><button class="rm" onclick="rmFile(${i})">${x}</button></span>`
   ).join("");
   const audioHtml = heldAudio.blob ? `<span class="thumb" style="display:flex;align-items:center;justify-content:center;color:var(--muted)">${svgIcon("audio",24)}<button class="rm" onclick="rmAudio()">${x}</button></span>` : "";
   box.innerHTML = imageHtml + fileHtml + audioHtml;
@@ -946,14 +961,170 @@ function addImages(input){
   input.value = "";
   renderThumbs();
 }
-function addHeldFile(file){
+function addHeldFile(file, staged=null){
   if(!file) return;
-  if((file.type || "").startsWith("image/")) heldImages.push(file);
-  else heldFiles.push(file);
+  const item = {
+    file,
+    kind: (file.type || "").startsWith("image/") ? "image" : "file",
+    status: staged ? "done" : "queued",
+    progress: staged ? 100 : 0,
+    staged,
+    error: "",
+    preview: (file.type || "").startsWith("image/") ? URL.createObjectURL(file) : "",
+  };
+  if(item.kind === "image") heldImages.push(item);
+  else heldFiles.push(item);
 }
 function rmImage(i){ heldImages.splice(i,1); renderThumbs(); }
 function rmFile(i){ heldFiles.splice(i,1); renderThumbs(); }
 function rmAudio(){ heldAudio.blob = null; renderThumbs(); }
+function formatBytes(n){
+  n = Number(n || 0);
+  if(n < 1024) return n + " B";
+  const units = ["KB","MB","GB","TB"];
+  let v = n / 1024, i = 0;
+  while(v >= 1024 && i < units.length - 1){ v /= 1024; i++; }
+  return `${v >= 10 ? v.toFixed(1) : v.toFixed(2)} ${units[i]}`;
+}
+function uploadStagedAttachment(item){
+  if(item.staged) return Promise.resolve(item.staged);
+  if((item.file?.size || 0) > 32 * 1024 * 1024) return uploadStagedAttachmentChunked(item);
+  item.status = "uploading"; item.progress = 0; item.error = ""; renderThumbs();
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const fd = new FormData();
+    fd.append("file", item.file);
+    fd.append("kind", item.kind);
+    xhr.open("POST", "/api/inbox/staged-media");
+    xhr.upload.onprogress = ev => {
+      if(ev.lengthComputable){
+        item.progress = Math.min(99, (ev.loaded / ev.total) * 100);
+        scheduleThumbRender();
+        document.getElementById("capHint").textContent = `正在上传 ${item.file.name || "文件"}：${Math.round(item.progress)}%`;
+      }
+    };
+    xhr.onload = () => {
+      if(xhr.status >= 200 && xhr.status < 300){
+        try {
+          item.staged = JSON.parse(xhr.responseText);
+          item.status = "done"; item.progress = 100; renderThumbs();
+          resolve(item.staged);
+        } catch(e){
+          item.status = "error"; item.error = "响应异常"; renderThumbs(); reject(e);
+        }
+      } else {
+        item.status = "error"; item.error = xhr.responseText || `HTTP ${xhr.status}`; renderThumbs();
+        reject(new Error(item.error));
+      }
+    };
+    xhr.onerror = () => {
+      item.status = "error"; item.error = "网络中断"; renderThumbs();
+      reject(new Error(item.error));
+    };
+    xhr.send(fd);
+  });
+}
+async function uploadStagedAttachmentChunked(item){
+  if(item.staged) return item.staged;
+  const localPage = ["127.0.0.1", "localhost", "::1"].includes(location.hostname);
+  const chunkSize = (localPage ? 128 : 32) * 1024 * 1024;
+  const total = Math.ceil(item.file.size / chunkSize);
+  const uploadId = item.uploadId || (crypto.randomUUID ? crypto.randomUUID().replaceAll("-", "") : String(Date.now()) + Math.random().toString(16).slice(2));
+  item.uploadId = uploadId;
+  item.status = "uploading"; item.progress = 0; item.error = ""; renderThumbs();
+  for(let index = 0; index < total; index++){
+    const start = index * chunkSize;
+    const end = Math.min(item.file.size, start + chunkSize);
+    const chunk = item.file.slice(start, end);
+    const result = await uploadOneChunk(item, uploadId, index, total, start, chunk);
+    if(result){
+      item.staged = result;
+      item.status = "done"; item.progress = 100; renderThumbs();
+      return result;
+    }
+  }
+  throw new Error("分片上传未完成");
+}
+function uploadOneChunk(item, uploadId, index, total, offset, chunk){
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const qs = new URLSearchParams({
+      upload_id: uploadId,
+      index: String(index),
+      total: String(total),
+      offset: String(offset),
+      total_size: String(item.file.size),
+      filename: item.file.name || "attachment.bin",
+      kind: item.kind,
+    });
+    xhr.open("POST", "/api/inbox/staged-chunk-raw?" + qs.toString());
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = ev => {
+      if(ev.lengthComputable){
+        item.progress = Math.min(99, ((offset + ev.loaded) / item.file.size) * 100);
+        scheduleThumbRender();
+        document.getElementById("capHint").textContent = `正在上传 ${item.file.name || "文件"}：${Math.round(item.progress)}%`;
+      }
+    };
+    xhr.onload = () => {
+      if(xhr.status >= 200 && xhr.status < 300){
+        try {
+          const payload = JSON.parse(xhr.responseText || "{}");
+          resolve(payload.done ? payload : null);
+        } catch(e){ reject(e); }
+      } else {
+        item.status = "error"; item.error = xhr.responseText || `HTTP ${xhr.status}`; renderThumbs();
+        reject(new Error(item.error));
+      }
+    };
+    xhr.onerror = () => {
+      item.status = "error"; item.error = "网络中断"; renderThumbs();
+      reject(new Error(item.error));
+    };
+    xhr.send(chunk);
+  });
+}
+async function uploadAllAttachments(){
+  const all = [...heldImages, ...heldFiles];
+  const staged = new Array(all.length);
+  let cursor = 0;
+  async function worker(){
+    while(cursor < all.length){
+      const index = cursor++;
+      staged[index] = await uploadStagedAttachment(all[index]);
+    }
+  }
+  await Promise.all(Array.from({length: Math.min(2, all.length)}, worker));
+  return staged;
+}
+
+let thumbRenderTimer = 0;
+function scheduleThumbRender(){
+  if(thumbRenderTimer) return;
+  thumbRenderTimer = setTimeout(() => {
+    thumbRenderTimer = 0;
+    renderThumbs();
+  }, 180);
+}
+
+async function stageLocalClipboardFiles(files){
+  const localPage = ["127.0.0.1", "localhost", "::1"].includes(location.hostname);
+  if(!localPage || !files.some(file => file.size > 32 * 1024 * 1024)) return [];
+  try {
+    const response = await api("/api/inbox/stage-local-clipboard", {
+      method: "POST",
+      body: JSON.stringify({files: files.map(file => ({
+        name: file.name || "attachment.bin",
+        size: Number(file.size || 0),
+        last_modified: Number(file.lastModified || 0),
+        kind: (file.type || "").startsWith("image/") ? "image" : "file",
+      }))}),
+    });
+    return Array.isArray(response.items) ? response.items : [];
+  } catch(_err){
+    return [];
+  }
+}
 
 async function handleCapPaste(event){
   const ta = document.getElementById("capText");
@@ -970,7 +1141,8 @@ async function handleCapPaste(event){
   }
   if(!files.length) return;
   event.preventDefault();
-  files.forEach(addHeldFile);
+  const localItems = await stageLocalClipboardFiles(files);
+  files.forEach((file, index) => addHeldFile(file, localItems[index]?.staged || null));
   renderThumbs();
   const imageCount = files.filter(f => (f.type || "").startsWith("image/")).length;
   const fileCount = files.length - imageCount;
@@ -1004,7 +1176,10 @@ function handleCapDrop(event){
   const parts = [];
   if(imageCount) parts.push(`${imageCount} 张图片`);
   if(fileCount) parts.push(`${fileCount} 个文件`);
-  document.getElementById("capHint").textContent = `已加入 ${parts.join("、")}，打包存档时会一起上传。`;
+  const linked = localItems.filter(item => item?.staged).length;
+  document.getElementById("capHint").textContent = linked
+    ? `已加入 ${parts.join("、")}，其中 ${linked} 个大文件已在本机瞬间登记。`
+    : `已加入 ${parts.join("、")}，打包存档时会一起上传。`;
 }
 
 function speechSupported(){ return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
@@ -1061,24 +1236,20 @@ async function archive(){
   const text = document.getElementById("capText").value.trim();
   if(!text && !heldImages.length && !heldFiles.length && !heldAudio.blob){ document.getElementById("capHint").textContent="先说点什么、拍张照，粘贴文件，或打段字。"; return; }
   const btn = document.getElementById("archiveBtn");
-  btn.disabled = true; document.getElementById("capHint").textContent = "存档中…";
+  btn.disabled = true; document.getElementById("capHint").textContent = "准备上传…";
+  uploadState.active = true;
   try {
     const hint = document.getElementById("expPick").value;
-    const entry = await api("/api/inbox", {method:"POST", body: JSON.stringify({text, hinted_experiment_id: hint ? Number(hint) : null})});
-    for(const f of heldImages){
-      const fd = new FormData(); fd.append("file", f); fd.append("kind", "image");
-      await fetch(`/api/inbox/${entry.id}/media`, {method:"POST", body:fd});
-    }
-    for(const f of heldFiles){
-      const fd = new FormData(); fd.append("file", f); fd.append("kind", "file");
-      await fetch(`/api/inbox/${entry.id}/media`, {method:"POST", body:fd});
-    }
+    const attachments = await uploadAllAttachments();
+    document.getElementById("capHint").textContent = "写入速记…";
+    const entry = await api("/api/inbox", {method:"POST", body: JSON.stringify({text, hinted_experiment_id: hint ? Number(hint) : null, attachments})});
     if(heldAudio.blob){
       const fd = new FormData();
       const ext = (heldAudio.blob.type||"").includes("mp4") ? ".m4a" : ".webm";
       fd.append("file", new File([heldAudio.blob], "voice"+ext, {type:heldAudio.blob.type}));
       fd.append("kind", "audio");
-      await fetch(`/api/inbox/${entry.id}/media`, {method:"POST", body:fd});
+      const audioRes = await fetch(`/api/inbox/${entry.id}/media`, {method:"POST", body:fd});
+      if(!audioRes.ok) throw new Error(await audioRes.text());
     }
     document.getElementById("capText").value = "";
     heldImages.length = 0; heldFiles.length = 0; heldAudio.blob = null; renderThumbs();
@@ -1087,7 +1258,7 @@ async function archive(){
     loadPending();
   } catch(e){
     document.getElementById("capHint").textContent = "存档失败："+(e.message||e);
-  } finally { btn.disabled = false; }
+  } finally { uploadState.active = false; btn.disabled = false; }
 }
 
 async function loadPending(){
@@ -1163,6 +1334,18 @@ if(capCard){
   capCard.addEventListener("dragleave", handleCapDragLeave);
   capCard.addEventListener("drop", handleCapDrop);
 }
+window.addEventListener("beforeunload", event => {
+  if(!uploadState.active) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+document.addEventListener("click", event => {
+  if(!uploadState.active) return;
+  const link = event.target.closest && event.target.closest("a[href]");
+  if(!link) return;
+  event.preventDefault();
+  document.getElementById("capHint").textContent = "文件还在上传，完成前不要切换页面。";
+});
 loadPending();
 // refresh so background transcription text shows up; skip while editing a note
 setInterval(() => { if(!document.querySelector(".pending-edit.open")) loadPending(); }, 12000);
@@ -1633,7 +1816,7 @@ function cardHtml(x){{
   const date = x.created_at ? new Date(x.created_at).toLocaleDateString() : "";
   return `<div class="row-card">
     <div class="rt">${{esc(x.name)}} <span class="badge ${{cls}}">${{LABEL[x.status]||x.status}}</span></div>
-    <div class="rm">${{date}} · 步骤 ${{x.completed_steps}}/${{x.total_steps}}</div>
+    <div class="rm">#${{esc(x.id)}} · ${{date}} · 步骤 ${{x.completed_steps}}/${{x.total_steps}}</div>
     <div class="ra">
       ${{active ? `<a class="button green" href="/run?experiment_id=${{x.id}}">继续</a>` : ""}}
       <a class="button secondary" href="/run/report/${{x.id}}?return_to=history">查看报告</a>
@@ -2246,7 +2429,7 @@ function renderBoard(exps){
       <div class="bc-top"><span class="bc-name">${esc(e.name)}</span><span class="bc-badge s-${esc(e.status)}">${esc(label)}</span></div>
       <div class="progress"><div style="width:${pct}%"></div></div>
       <div class="bc-foot">
-        <div class="bc-foot-l"><span class="bc-meta">${done}/${total} 步 · ${pct}%</span>${timerChip}</div>
+        <div class="bc-foot-l"><span class="bc-meta">#${esc(e.id)} · ${done}/${total} 步 · ${pct}%</span>${timerChip}</div>
         <button class="bc-abandon" onclick="event.stopPropagation(); abandonExperiment('${e.id}', ${esc(JSON.stringify(e.name))})">放弃</button>
       </div>
     </div>`;
@@ -2723,7 +2906,7 @@ function renderSteps(items){
       <button class="secondary" onclick="goStep(1)" ${idx >= items.length - 1 ? "disabled" : ""}>下一步 →</button>
     </div>
     <div class="section-head" style="margin-top:4px">
-      <div class="small">Step ${idx + 1} / ${items.length} · 已完成 ${doneCount}/${items.length}${step.completed_at ? ' · <span class="done">本步已完成 ✓</span>' : ''}</div>
+      <div class="small">#${esc(selectedExperiment)} · Step ${idx + 1} / ${items.length} · 已完成 ${doneCount}/${items.length}${step.completed_at ? ' · <span class="done">本步已完成 ✓</span>' : ''}</div>
       <button class="edit-link" onclick="editExperimentName()">改实验名</button>
     </div>
     <div class="section-head" style="margin-top:2px">
@@ -4346,6 +4529,7 @@ async def upload_voice_audio(
 class InboxCreate(BaseModel):
     text: str = ""
     hinted_experiment_id: Optional[int] = None
+    attachments: Optional[list[dict]] = None
 
 
 class InboxUpdate(BaseModel):
@@ -4386,7 +4570,7 @@ def _inbox_to_dict(entry: dict) -> dict:
         name = os.path.basename(clean)
         url = "/photos/" + clean
         ext = os.path.splitext(name.lower())[1]
-        if ext in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"}:
+        if _is_image_ext(ext):
             image_urls.append(url)
         else:
             file_urls.append({"url": url, "name": name or clean})
@@ -4404,6 +4588,160 @@ def _safe_upload_name(name: str, fallback: str) -> str:
     cleaned = "".join(ch if ch not in '<>:"/\\|?*\x00' else "_" for ch in raw)
     cleaned = cleaned.strip(" .")
     return (cleaned or fallback)[:160]
+
+
+def _is_image_ext(ext: str) -> bool:
+    return str(ext or "").lower() in {
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
+        ".tif", ".tiff", ".heic", ".heif", ".svg",
+    }
+
+
+def _file_url_for_rel(rel_path: str) -> str:
+    return "/photos/" + str(rel_path).replace("\\", "/").lstrip("/")
+
+
+def _windows_clipboard_file_paths() -> list[str]:
+    """Return Explorer's copied-file list without exposing it to the client."""
+    if os.name != "nt":
+        return []
+    import ctypes
+    import time
+
+    user32 = ctypes.windll.user32
+    shell32 = ctypes.windll.shell32
+    user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+    user32.OpenClipboard.restype = ctypes.c_bool
+    user32.GetClipboardData.argtypes = [ctypes.c_uint]
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    shell32.DragQueryFileW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_uint]
+    shell32.DragQueryFileW.restype = ctypes.c_uint
+
+    opened = False
+    for _ in range(8):
+        if user32.OpenClipboard(None):
+            opened = True
+            break
+        time.sleep(0.025)
+    if not opened:
+        return []
+    try:
+        handle = user32.GetClipboardData(15)  # CF_HDROP
+        if not handle:
+            return []
+        count = min(int(shell32.DragQueryFileW(handle, 0xFFFFFFFF, None, 0)), 32)
+        paths: list[str] = []
+        for index in range(count):
+            length = int(shell32.DragQueryFileW(handle, index, None, 0))
+            if length <= 0:
+                continue
+            buf = ctypes.create_unicode_buffer(length + 1)
+            shell32.DragQueryFileW(handle, index, buf, length + 1)
+            paths.append(buf.value)
+        return paths
+    finally:
+        user32.CloseClipboard()
+
+
+async def _save_upload_stream(file: UploadFile, filepath: str) -> int:
+    total = 0
+    with open(filepath, "wb") as out:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+            total += len(chunk)
+    return total
+
+
+def _assert_inbox_rel_path(rel_path: str) -> str:
+    clean = str(rel_path or "").replace("\\", "/").lstrip("/")
+    if not clean.startswith("inbox/") or "/../" in f"/{clean}/" or clean.endswith("/"):
+        raise HTTPException(400, "附件路径无效")
+    return clean
+
+
+def _attach_staged_files(entry_id: int, attachments: Optional[list[dict]]) -> dict:
+    updated = db_ops.get_inbox_entry(entry_id)
+    for item in attachments or []:
+        if not isinstance(item, dict):
+            continue
+        rel = _assert_inbox_rel_path(str(item.get("rel_path") or ""))
+        if not rel.startswith("inbox/_staged/"):
+            raise HTTPException(400, "只能附加预上传文件")
+        src = os.path.join(db_ops.get_photos_dir(), rel.replace("/", os.sep))
+        if not os.path.isfile(src) or os.path.getsize(src) <= 0:
+            raise HTTPException(400, f"预上传文件不存在或为空：{os.path.basename(src)}")
+
+        sub_dir = os.path.join(db_ops.get_inbox_dir(), str(entry_id))
+        os.makedirs(sub_dir, exist_ok=True)
+        original = _safe_upload_name(item.get("name") or os.path.basename(src), "attachment")
+        stem, ext = os.path.splitext(original)
+        if not ext:
+            ext = os.path.splitext(src)[1]
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+        dest_name = f"{stem}_{ts}{ext}"
+        dest = os.path.join(sub_dir, dest_name)
+        os.replace(src, dest)
+        updated = db_ops.add_inbox_image(entry_id, f"inbox/{entry_id}/{dest_name}")
+    return updated or db_ops.get_inbox_entry(entry_id)
+
+
+_STAGED_MAX_AGE_SECONDS = 6 * 3600
+
+
+def _prune_staged(max_age_seconds: int = _STAGED_MAX_AGE_SECONDS) -> dict:
+    """Delete stale files from the inbox staging area (inbox/_staged + _chunks).
+    Staged files are moved out on finalize, so anything left past the age cutoff
+    is an abandoned or incomplete upload. Returns {"removed", "bytes"}."""
+    staged_dir = os.path.join(db_ops.get_inbox_dir(), "_staged")
+    if not os.path.isdir(staged_dir):
+        return {"removed": 0, "bytes": 0}
+    now = time.time()
+    removed = 0
+    freed = 0
+    for root, _dirs, files in os.walk(staged_dir):
+        for name in files:
+            p = os.path.join(root, name)
+            try:
+                st = os.stat(p)
+                if now - st.st_mtime >= max_age_seconds:
+                    freed += st.st_size
+                    os.remove(p)
+                    removed += 1
+            except OSError:
+                pass
+    if removed:
+        print(f"[staged] pruned {removed} stale file(s), freed {freed} bytes")
+    return {"removed": removed, "bytes": freed}
+
+
+@app.on_event("startup")
+def _startup_prune_staged():
+    try:
+        _prune_staged()
+    except Exception as exc:
+        print(f"[staged] startup prune failed: {exc}")
+
+
+def _attach_inbox_files_to_step(entry: dict, step_id: int) -> int:
+    step = db_ops.get_step(step_id)
+    if not step:
+        return 0
+    existing = {str(item.get("path") or "") for item in step.get_attachments()}
+    added = 0
+    for i, rel in enumerate(entry.get("image_paths", []) or [], 1):
+        rel = str(rel or "").replace("\\", "/").lstrip("/")
+        if not rel or rel in existing:
+            continue
+        name = os.path.basename(rel)
+        ext = os.path.splitext(name.lower())[1]
+        label = f"速记图 {i}" if _is_image_ext(ext) else (name or f"速记附件 {i}")
+        db_ops.add_photo_to_step(step_id, rel, label)
+        existing.add(rel)
+        added += 1
+    return added
 
 
 @app.get("/api/inbox")
@@ -4426,7 +4764,272 @@ def create_inbox(body: InboxCreate):
     if hint and not db_ops.get_experiment(hint):
         hint = None
     entry = db_ops.create_inbox_entry(text=body.text.strip(), hinted_experiment_id=hint)
+    if body.attachments:
+        entry = _attach_staged_files(entry["id"], body.attachments)
     return _inbox_to_dict(entry)
+
+
+@app.post("/api/inbox/staged-media", status_code=201)
+async def upload_inbox_staged_media(
+    file: UploadFile = File(...),
+    kind: str = Form("file"),
+):
+    _prune_staged()
+    staged_dir = os.path.join(db_ops.get_inbox_dir(), "_staged")
+    os.makedirs(staged_dir, exist_ok=True)
+    ext = os.path.splitext(file.filename or "")[1] or (".jpg" if kind == "image" else ".bin")
+    safe = _safe_upload_name(file.filename or f"attachment{ext}", f"attachment{ext}")
+    token = uuid.uuid4().hex
+    filename = f"{token}_{safe}"
+    filepath = os.path.join(staged_dir, filename)
+    size = await _save_upload_stream(file, filepath)
+    if size <= 0:
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        raise HTTPException(400, "文件为空")
+    rel_path = f"inbox/_staged/{filename}"
+    return {
+        "token": token,
+        "rel_path": rel_path,
+        "name": safe,
+        "size": size,
+        "kind": "image" if kind == "image" or _is_image_ext(ext) else "file",
+        "url": _file_url_for_rel(rel_path),
+    }
+
+
+@app.post("/api/inbox/stage-local-clipboard", status_code=201)
+def stage_local_clipboard_files(request: Request, body: dict):
+    host = str(request.headers.get("host") or "").lower()
+    if not (
+        host == "localhost" or host.startswith("localhost:")
+        or host == "127.0.0.1" or host.startswith("127.0.0.1:")
+        or host == "[::1]" or host.startswith("[::1]:")
+    ):
+        raise HTTPException(403, "本机快速登记只能从本机地址使用")
+
+    requested = body.get("files") if isinstance(body, dict) else None
+    if not isinstance(requested, list) or len(requested) > 32:
+        raise HTTPException(400, "文件列表无效")
+
+    clipboard_paths = _windows_clipboard_file_paths()
+    available: list[tuple[str, int]] = []
+    for path in clipboard_paths:
+        try:
+            if os.path.isfile(path):
+                available.append((path, os.path.getsize(path)))
+        except OSError:
+            continue
+
+    staged_dir = os.path.join(db_ops.get_inbox_dir(), "_staged")
+    os.makedirs(staged_dir, exist_ok=True)
+    used: set[str] = set()
+    items: list[dict] = []
+    for raw in requested:
+        result: dict = {"staged": None}
+        if not isinstance(raw, dict):
+            items.append(result)
+            continue
+        safe = _safe_upload_name(raw.get("name") or "attachment.bin", "attachment.bin")
+        try:
+            expected_size = int(raw.get("size") or 0)
+        except (TypeError, ValueError):
+            expected_size = 0
+        if expected_size <= 32 * 1024 * 1024:
+            items.append(result)
+            continue
+
+        source = next((
+            path for path, size in available
+            if path not in used
+            and size == expected_size
+            and os.path.basename(path).casefold() == safe.casefold()
+        ), None)
+        if not source:
+            items.append(result)
+            continue
+
+        token = uuid.uuid4().hex
+        final_name = f"{token}_{safe}"
+        filepath = os.path.join(staged_dir, final_name)
+        try:
+            os.link(source, filepath)
+        except OSError:
+            items.append(result)
+            continue
+
+        used.add(source)
+        ext = os.path.splitext(safe)[1]
+        kind = str(raw.get("kind") or "file")
+        rel_path = f"inbox/_staged/{final_name}"
+        result["staged"] = {
+            "token": token,
+            "rel_path": rel_path,
+            "name": safe,
+            "size": expected_size,
+            "kind": "image" if kind == "image" or _is_image_ext(ext) else "file",
+            "url": _file_url_for_rel(rel_path),
+            "method": "hardlink",
+        }
+        items.append(result)
+    return {"items": items}
+
+
+@app.post("/api/inbox/staged-chunk", status_code=201)
+async def upload_inbox_staged_chunk(
+    upload_id: str = Form(...),
+    index: int = Form(...),
+    total: int = Form(...),
+    offset: int = Form(...),
+    total_size: int = Form(...),
+    filename: str = Form("attachment.bin"),
+    kind: str = Form("file"),
+    chunk: UploadFile = File(...),
+):
+    token = re.sub(r"[^a-fA-F0-9]", "", str(upload_id or ""))[:64]
+    if len(token) < 12:
+        raise HTTPException(400, "upload_id 无效")
+    if index < 0 or total <= 0 or index >= total or offset < 0 or total_size <= 0:
+        raise HTTPException(400, "分片参数无效")
+
+    staged_dir = os.path.join(db_ops.get_inbox_dir(), "_staged")
+    chunk_dir = os.path.join(staged_dir, "_chunks")
+    os.makedirs(chunk_dir, exist_ok=True)
+    safe = _safe_upload_name(filename, "attachment.bin")
+    ext = os.path.splitext(safe)[1] or ".bin"
+    part_path = os.path.join(chunk_dir, f"{token}.part")
+    meta_path = os.path.join(chunk_dir, f"{token}.json")
+
+    if index == 0:
+        _prune_staged()
+        for p in (part_path, meta_path):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except OSError:
+                pass
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump({"filename": safe, "kind": kind, "total": total, "total_size": total_size}, f)
+    elif not os.path.exists(part_path):
+        raise HTTPException(409, "缺少前序分片，请重新上传")
+
+    current_size = os.path.getsize(part_path) if os.path.exists(part_path) else 0
+    if current_size != offset:
+        raise HTTPException(409, f"分片偏移不匹配：已有 {current_size}，收到 {offset}")
+
+    written = 0
+    with open(part_path, "ab") as out:
+        while True:
+            data = await chunk.read(1024 * 1024)
+            if not data:
+                break
+            out.write(data)
+            written += len(data)
+    if written <= 0:
+        raise HTTPException(400, "分片为空")
+
+    final_size = os.path.getsize(part_path)
+    if index < total - 1:
+        return {"done": False, "received": final_size}
+    if final_size != total_size:
+        raise HTTPException(409, f"文件大小不匹配：已有 {final_size}，应为 {total_size}")
+
+    final_name = f"{token}_{safe}"
+    final_path = os.path.join(staged_dir, final_name)
+    os.replace(part_path, final_path)
+    try:
+        os.remove(meta_path)
+    except OSError:
+        pass
+    rel_path = f"inbox/_staged/{final_name}"
+    return {
+        "done": True,
+        "token": token,
+        "rel_path": rel_path,
+        "name": safe,
+        "size": final_size,
+        "kind": "image" if kind == "image" or _is_image_ext(ext) else "file",
+        "url": _file_url_for_rel(rel_path),
+    }
+
+
+@app.post("/api/inbox/staged-chunk-raw", status_code=201)
+async def upload_inbox_staged_chunk_raw(
+    request: Request,
+    upload_id: str = Query(...),
+    index: int = Query(...),
+    total: int = Query(...),
+    offset: int = Query(...),
+    total_size: int = Query(...),
+    filename: str = Query("attachment.bin"),
+    kind: str = Query("file"),
+):
+    token = re.sub(r"[^a-fA-F0-9]", "", str(upload_id or ""))[:64]
+    if len(token) < 12:
+        raise HTTPException(400, "upload_id 无效")
+    if index < 0 or total <= 0 or index >= total or offset < 0 or total_size <= 0:
+        raise HTTPException(400, "分片参数无效")
+
+    staged_dir = os.path.join(db_ops.get_inbox_dir(), "_staged")
+    chunk_dir = os.path.join(staged_dir, "_chunks")
+    os.makedirs(chunk_dir, exist_ok=True)
+    safe = _safe_upload_name(filename, "attachment.bin")
+    ext = os.path.splitext(safe)[1] or ".bin"
+    part_path = os.path.join(chunk_dir, f"{token}.part")
+    meta_path = os.path.join(chunk_dir, f"{token}.json")
+
+    if index == 0:
+        _prune_staged()
+        for p in (part_path, meta_path):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except OSError:
+                pass
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump({"filename": safe, "kind": kind, "total": total, "total_size": total_size}, f)
+    elif not os.path.exists(part_path):
+        raise HTTPException(409, "缺少前序分片，请重新上传")
+
+    current_size = os.path.getsize(part_path) if os.path.exists(part_path) else 0
+    if current_size != offset:
+        raise HTTPException(409, f"分片偏移不匹配：已有 {current_size}，收到 {offset}")
+
+    written = 0
+    with open(part_path, "ab") as out:
+        async for data in request.stream():
+            if not data:
+                continue
+            out.write(data)
+            written += len(data)
+    if written <= 0:
+        raise HTTPException(400, "分片为空")
+
+    final_size = os.path.getsize(part_path)
+    if index < total - 1:
+        return {"done": False, "received": final_size}
+    if final_size != total_size:
+        raise HTTPException(409, f"文件大小不匹配：已有 {final_size}，应为 {total_size}")
+
+    final_name = f"{token}_{safe}"
+    final_path = os.path.join(staged_dir, final_name)
+    os.replace(part_path, final_path)
+    try:
+        os.remove(meta_path)
+    except OSError:
+        pass
+    rel_path = f"inbox/_staged/{final_name}"
+    return {
+        "done": True,
+        "token": token,
+        "rel_path": rel_path,
+        "name": safe,
+        "size": final_size,
+        "kind": "image" if kind == "image" or _is_image_ext(ext) else "file",
+        "url": _file_url_for_rel(rel_path),
+    }
 
 
 @app.patch("/api/inbox/{entry_id}")
@@ -4532,13 +5135,9 @@ def apply_inbox(entry_id: int, body: InboxApply):
         values[STEP_NOTES_KEY] = f"{prev}\n\n{note}" if prev and note not in prev else (prev or note)
     db_ops.update_step(step_id, values_json=json.dumps(values, ensure_ascii=False))
 
-    # attach captured images to the step
+    # attach captured images/files to the step
     if body.attach_images:
-        for i, rel in enumerate(entry.get("image_paths", []), 1):
-            name = os.path.basename(str(rel).replace("\\", "/"))
-            ext = os.path.splitext(name.lower())[1]
-            label = f"速记图 {i}" if ext in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"} else (name or f"速记附件 {i}")
-            db_ops.add_photo_to_step(step_id, rel, label)
+        _attach_inbox_files_to_step(entry, step_id)
 
     db_ops.update_inbox_entry(
         entry_id, status="filed",
@@ -4565,12 +5164,15 @@ def mark_inbox_filed(entry_id: int, body: InboxFiled):
     if entry.get("audio_path"):
         audio_deleted = _delete_audio_file(entry["audio_path"])
         db_ops.set_inbox_audio(entry_id, "")
+    attached_files = 0
+    if body.step_id is not None:
+        attached_files = _attach_inbox_files_to_step(entry, body.step_id)
     db_ops.update_inbox_entry(
         entry_id, status="filed", proposal=record,
         filed_experiment_id=body.experiment_id, filed_step_id=body.step_id,
         filed_at=db_ops._now(),
     )
-    return {"ok": True, "audio_deleted": audio_deleted}
+    return {"ok": True, "audio_deleted": audio_deleted, "attached_files": attached_files}
 
 
 @app.post("/api/inbox/{entry_id}/dismiss")
