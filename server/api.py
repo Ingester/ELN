@@ -75,13 +75,24 @@ def _delete_audio_file(rel_path: str) -> bool:
     return False
 
 
-_OVERLAY_TAG = '<script src="/openview/overlay.js" defer></script>'
+_OVERLAY_JS_PATH = os.path.join(os.path.dirname(__file__), "openview_overlay.js")
+try:
+    _OVERLAY_VER = hashlib.sha256(open(_OVERLAY_JS_PATH, "rb").read()).hexdigest()[:10]
+except Exception:
+    _OVERLAY_VER = "0"
+_OVERLAY_TAG = f'<script src="/openview/overlay.js?v={_OVERLAY_VER}" defer></script>'
+
+
+@app.get("/static/base.css")
+def static_base_css():
+    return Response(content=web_ui.BASE_CSS, media_type="text/css",
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 def _html_response(content: str, **kwargs) -> HTMLResponse:
     """Return localized HTML for the native web pages, with the comment overlay injected."""
     html = localize_html(content)
-    if "</body>" in html and _OVERLAY_TAG not in html:
+    if "</body>" in html and "/openview/overlay.js" not in html:
         html = html.replace("</body>", _OVERLAY_TAG + "\n</body>", 1)
     return HTMLResponse(html, **kwargs)
 
@@ -255,6 +266,7 @@ async def optional_password_auth(request: Request, call_next):
         request.method == "OPTIONS"
         or path in {
             "/login", "/logout", "/api/health", "/favicon.ico",
+            "/static/base.css",
             "/openview", "/openview/login", "/openview/logout",
             "/openview/overlay.js", "/api/openview/whoami",
         }
@@ -753,8 +765,7 @@ load();
 
 
 # ---- comment overlay (injected into every page) ----
-
-_OVERLAY_JS_PATH = os.path.join(os.path.dirname(__file__), "openview_overlay.js")
+# _OVERLAY_JS_PATH / _OVERLAY_VER are defined near the top of this module.
 
 
 @app.get("/openview/overlay.js")
@@ -764,8 +775,9 @@ def openview_overlay_js():
             js = f.read()
     except Exception:
         js = "/* overlay unavailable */"
+    # Cached forever; the ?v=<hash> in the injected tag busts it when it changes.
     return Response(content=js, media_type="application/javascript",
-                    headers={"Cache-Control": "no-store, max-age=0"})
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 # ─────────────────────────────────────────────

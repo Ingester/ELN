@@ -281,14 +281,23 @@ TIMER_DOCK_HTML = """
 """.replace("__ADD_ICON__", icon("timer", 20).replace("\n", ""))
 
 
+import hashlib as _hashlib
+
+# Content-hashed version so the browser caches base.css forever but re-fetches
+# when it actually changes (?v=<hash> busts the cache on deploy).
+ASSET_VER = _hashlib.sha256(BASE_CSS.encode("utf-8")).hexdigest()[:10]
+
+
 def page_head(title: str, extra_css: str = "") -> str:
-    """Standard <head> for server-rendered pages."""
+    """Standard <head> for server-rendered pages. The shared BASE_CSS is loaded
+    from a long-cached static file; only page-specific extra_css is inlined."""
     return (
         '<!doctype html>\n<html lang="zh-CN">\n<head>\n'
         '  <meta charset="utf-8" />\n'
         '  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />\n'
         '  <meta name="theme-color" content="#f4f2ec" />\n'
         f"  <title>{title}</title>\n"
-        f"  <style>{BASE_CSS}{extra_css}</style>\n"
+        f'  <link rel="stylesheet" href="/static/base.css?v={ASSET_VER}" />\n'
+        f"  <style>{extra_css}</style>\n"
         "</head>"
     )
