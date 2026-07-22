@@ -1487,6 +1487,13 @@ _RUNNER_CSS = """
       color:var(--faint); font-size:12px; font-weight:500; cursor:pointer; }
     .bc-abandon:hover { color:#c0503a; text-decoration:underline; }
     .board-empty { text-align:center; color:var(--muted); padding:44px 12px; line-height:1.9; }
+    .board-alarms { display:none; flex-wrap:wrap; gap:8px; margin:0 0 12px; }
+    .board-alarm { display:inline-flex; align-items:center; gap:6px; font-size:13px; padding:5px 12px;
+      border-radius:999px; background:#fdf1d6; color:#8a6d1e; font-variant-numeric:tabular-nums; }
+    .board-alarm.over { background:#a63a24; color:#fff; }
+    .board-alarm b { font-weight:700; }
+    .board-alarm .ba-label { font-weight:500; opacity:.85; }
+    .board-alarm svg { width:14px; height:14px; stroke:currentColor; fill:none; stroke-width:2; }
 
     .chips { display:flex; gap:7px; overflow-x:auto; padding:2px 2px 10px; scrollbar-width:none; }
     .chips::-webkit-scrollbar { display:none; }

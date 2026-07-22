@@ -678,6 +678,7 @@ _RUNNER_BODY = """
     <button class="icon-btn" onclick="refreshCurrent()" title="刷新" aria-label="刷新">__I_REFRESH__</button>
   </header>
   <main>
+    <div id="boardAlarms" class="board-alarms"></div>
     <div id="board"></div>
     <div id="queueInfo" class="queue-info"></div>
     <section id="steps"></section>
@@ -806,6 +807,26 @@ function setHeaderMode(v){
   document.getElementById("queueInfo").style.display = board ? "none" : "block";
   const dock = document.getElementById("elnDock");   // floating timer dock: only inside an experiment
   if(dock) dock.style.display = board ? "none" : "flex";
+  const ba = document.getElementById("boardAlarms"); // alarms/timers countdown shown on the board
+  if(ba) ba.style.display = board ? "flex" : "none";
+  if(board) renderBoardAlarms();
+}
+
+// Show active dock timers/alarms (localStorage) as live countdowns on the board.
+function renderBoardAlarms(){
+  const el = document.getElementById("boardAlarms");
+  if(!el || view !== "board") return;
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem("eln.quicktimers") || "[]"); } catch {}
+  if(!list.length){ el.style.display = "none"; el.innerHTML = ""; return; }
+  const now = Date.now();
+  el.style.display = "flex";
+  el.innerHTML = list.map(q => {
+    const remain = Math.round((q.endAt - now) / 1000);
+    const over = remain <= 0;
+    const icon = svgIcon(q.kind === "alarm" ? "clock" : "timer", 14);
+    return `<span class="board-alarm ${over?"over":""}">${icon}<b>${(over?"+":"")+fmtHMS(Math.abs(remain))}</b><span class="ba-label">${esc(q.label || (q.kind==="alarm"?"闹钟":"计时"))}</span></span>`;
+  }).join("");
 }
 
 async function showBoard(){
@@ -877,6 +898,7 @@ async function loadBoardTimers(){
 
 function tickBoardTimers(){
   if(view !== "board") return;
+  renderBoardAlarms();
   const now = Date.now();
   for(const key in boardTimers){
     const el = document.getElementById("bctimer-" + key);

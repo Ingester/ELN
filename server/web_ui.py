@@ -213,18 +213,25 @@ TIMER_DOCK_HTML = """
   #elnDockForm button { flex: 1; border: 0; border-radius: 10px; min-height: 38px; cursor: pointer; font: inherit; font-weight: 500; }
   #elnDockForm .go { background: var(--clay); color: #fff; }
   #elnDockForm .no { background: var(--inset); color: var(--ink); }
+  #elnDockForm .mode { min-height: 34px; font-size: 13px; }
+  #elnDockForm .mode.off { background: var(--inset); color: var(--muted); }
 </style>
 <div id="elnDock">
   <div id="elnDockPills"></div>
   <div id="elnDockForm">
-    <input id="elnDockLabel" placeholder="计时名称（如：孵育）" />
+    <div class="row" style="margin-bottom:8px">
+      <button type="button" class="mode go" id="elnModeTimer" onclick="ElnDock.setMode('timer')">计时</button>
+      <button type="button" class="mode off" id="elnModeAlarm" onclick="ElnDock.setMode('alarm')">闹钟</button>
+    </div>
+    <input id="elnDockLabel" placeholder="名称（如：孵育）" />
     <input id="elnDockMin" type="number" inputmode="decimal" min="0.1" step="0.5" placeholder="分钟" />
+    <input id="elnDockAt" type="datetime-local" style="display:none" />
     <div class="row">
       <button class="go" onclick="ElnDock.startQuick()">开始</button>
       <button class="no" onclick="ElnDock.toggleForm(false)">取消</button>
     </div>
   </div>
-  <button id="elnDockAdd" title="快速计时" aria-label="快速计时">__ADD_ICON__</button>
+  <button id="elnDockAdd" title="快速计时 / 闹钟" aria-label="快速计时或闹钟">__ADD_ICON__</button>
 </div>
 <script>
 (function(){
@@ -264,15 +271,29 @@ TIMER_DOCK_HTML = """
     box.innerHTML = parts.join(""); box.style.display = parts.length ? "flex" : "none";
     box.style.flexDirection = "column"; box.style.gap = "8px"; box.style.alignItems = "flex-start"; }
   function escHtml(v){ return String(v ?? "").replace(/[&<>"']/g, s => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[s])); }
+  let dockMode = "timer";
   window.ElnDock = {
     toggleForm(show){ unlockAudio(); const f = document.getElementById("elnDockForm");
       const open = show===undefined ? !f.classList.contains("open") : show; f.classList.toggle("open", open);
-      if(open) setTimeout(() => document.getElementById("elnDockMin").focus(), 50); },
-    startQuick(){ const min = parseFloat(document.getElementById("elnDockMin").value);
-      if(!min || min<=0){ document.getElementById("elnDockMin").focus(); return; }
-      const label = document.getElementById("elnDockLabel").value.trim(); const list = loadQuick();
-      list.push({ id: Date.now()+"-"+Math.random().toString(16).slice(2), label, endAt: Date.now()+Math.round(min*60000), alerted:false });
-      saveQuick(list); document.getElementById("elnDockMin").value=""; document.getElementById("elnDockLabel").value="";
+      if(open) ElnDock.setMode(dockMode); },
+    setMode(m){ dockMode = m;
+      document.getElementById("elnDockMin").style.display = m==="alarm" ? "none" : "block";
+      document.getElementById("elnDockAt").style.display = m==="alarm" ? "block" : "none";
+      document.getElementById("elnModeTimer").className = "mode " + (m==="alarm"?"off":"go");
+      document.getElementById("elnModeAlarm").className = "mode " + (m==="alarm"?"go":"off");
+      setTimeout(() => { const el = document.getElementById(m==="alarm"?"elnDockAt":"elnDockMin"); if(el) el.focus(); }, 40); },
+    startQuick(){ const label = document.getElementById("elnDockLabel").value.trim(); let endAt, kind;
+      if(dockMode==="alarm"){ const v = document.getElementById("elnDockAt").value;
+        endAt = v ? new Date(v).getTime() : NaN;
+        if(!endAt || endAt <= Date.now()){ document.getElementById("elnDockAt").focus(); return; }
+        kind = "alarm";
+      } else { const min = parseFloat(document.getElementById("elnDockMin").value);
+        if(!min || min<=0){ document.getElementById("elnDockMin").focus(); return; }
+        endAt = Date.now()+Math.round(min*60000); kind = "timer"; }
+      const list = loadQuick();
+      list.push({ id: Date.now()+"-"+Math.random().toString(16).slice(2), label, endAt, alerted:false, kind });
+      saveQuick(list);
+      document.getElementById("elnDockMin").value=""; document.getElementById("elnDockAt").value=""; document.getElementById("elnDockLabel").value="";
       ElnDock.toggleForm(false); render(); },
     dismissQuick(id){ saveQuick(loadQuick().filter(q => q.id !== id)); render(); },
     openStep(expId, stepId){ location.href = "/run?experiment_id="+expId+"&step_id="+stepId; }
