@@ -17,6 +17,11 @@ if (-not (Test-Path $Python)) {
     throw "Python not found: $Python"
 }
 
+$SavedPassword = [Environment]::GetEnvironmentVariable("ELN_AUTH_PASSWORD", "User")
+if ($SavedPassword) {
+    $env:ELN_AUTH_PASSWORD = $SavedPassword
+}
+
 if (-not $env:ELN_AUTH_PASSWORD) {
     throw "Set ELN_AUTH_PASSWORD before starting public tunnel mode. Example: setx ELN_AUTH_PASSWORD `"your-long-password`""
 }

@@ -13,6 +13,21 @@ import os
 import sys
 
 
+def _load_persisted_windows_password() -> None:
+    """Prefer the current user's saved ELN password over a stale parent env."""
+    if os.name != "nt":
+        return
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            value, _ = winreg.QueryValueEx(key, "ELN_AUTH_PASSWORD")
+        if str(value):
+            os.environ["ELN_AUTH_PASSWORD"] = str(value)
+    except (FileNotFoundError, OSError):
+        pass
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, str(default)))
@@ -21,6 +36,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 if __name__ == "__main__":
+    _load_persisted_windows_password()
     api_host = os.environ.get("ELN_API_HOST", "0.0.0.0")
     api_port = _env_int("ELN_API_PORT", 8600)
 
