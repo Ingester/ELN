@@ -893,11 +893,12 @@ _CAPTURE_CSS = _NAV_CSS + """
     .pending-item .edit-thumb { cursor:pointer; }
     .pending-item .pt { flex:1; min-width:0; font-size:14px; overflow-wrap:anywhere; }
     .pending-item .pm { font-size:12px; color:var(--muted); margin-top:2px; }
-    .pending-edit { display:none; margin-top:8px; }
-    .pending-edit.open { display:block; }
-    .pending-edit textarea { min-height:92px; font-size:14px; background:#fff; }
-    .pending-edit .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
-    .pending-edit button { min-height:36px; padding:6px 12px; font-size:13.5px; }
+    .pending-text { white-space:pre-wrap; cursor:text; border-radius:6px; padding:1px 3px; margin:-1px -3px; }
+    .pending-text:hover { background:rgba(0,0,0,.03); }
+    .pending-text .ph-text { color:var(--faint); }
+    .pending-inline { width:100%; min-height:92px; font-size:14px; background:#fff; }
+    .pending-edit-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+    .pending-edit-row button { min-height:36px; padding:6px 12px; font-size:13.5px; }
 """
 
 # _CAPTURE_BODY moved to server/page_templates.py
@@ -956,6 +957,10 @@ _INBOX_CSS = _NAV_CSS + """
     .ai-panel.open { display:block; }
     .ai-panel pre { background:var(--inset); border:1px solid var(--line); border-radius:10px; padding:12px;
       font-size:12.5px; line-height:1.55; white-space:pre-wrap; word-break:break-word; max-height:280px; overflow:auto; }
+    .ai-panel textarea#aiPrompt { width:100%; min-height:220px; background:var(--inset); border:1px solid var(--line);
+      border-radius:10px; padding:12px; font-size:12.5px; line-height:1.55; resize:vertical; }
+    .entry .efiles { display:flex; flex-direction:column; gap:5px; margin:6px 0; }
+    .entry .efile { display:inline-flex; align-items:center; gap:5px; font-size:13px; color:var(--clay-ink); overflow-wrap:anywhere; }
     .chips { display:flex; gap:8px; margin:2px 2px 14px; }
     .chip { min-height:34px; padding:6px 14px; font-size:13px; border-radius:999px; background:var(--card);
       border:1px solid var(--line); color:var(--muted); box-shadow:none; }
@@ -1525,7 +1530,7 @@ _RUNNER_CSS = """
     .md-slot.has-md .md-chip { color:var(--clay-ink); background:var(--clay-soft); border-color:var(--clay-line); }
     .md-preview { width:100%; border:1px solid var(--line); border-radius:10px; background:#fbfaf7; padding:10px 12px;
       color:var(--ink); font-size:14px; line-height:1.6; overflow-wrap:anywhere; }
-    .md-preview.empty { color:var(--faint); font-size:13px; }
+    .md-preview.empty { display:none; }
     .md-preview :first-child { margin-top:0; }
     .md-preview :last-child { margin-bottom:0; }
     .md-preview pre { white-space:pre-wrap; word-break:break-word; background:#f4f1ea; border:1px solid var(--line); border-radius:8px; padding:8px; }
@@ -1555,8 +1560,9 @@ _RUNNER_CSS = """
 
     .photo-row { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
     .photo-row input[type=text] { width:100%; }
-    .pr-btns { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
-    .pr-btns .button, .pr-btns button { width:100%; min-height:40px; padding:7px 6px; font-size:14px; }
+    .pr-btns { display:flex; gap:8px; }
+    .pr-btns .button, .pr-btns button { flex:1 1 0; min-width:0; height:42px; min-height:42px;
+      padding:6px 4px; font-size:14px; white-space:nowrap; box-sizing:border-box; margin:0; }
     .pr-submit { display:flex; gap:10px; align-items:center; }
     .pr-submit .small { color:var(--muted); }
     input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
@@ -1599,6 +1605,7 @@ _RUNNER_CSS = """
 
     /* Voice notes */
     .voice-list { display:grid; gap:8px; margin-top:10px; }
+    .mic-btn { min-height:38px; padding:6px 14px; margin-top:14px; }
     .voice-note { display:flex; gap:10px; align-items:flex-start; background:#fbfaf7; border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
     .voice-note .vtime { flex:0 0 auto; font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; padding-top:2px; }
     .voice-note .vbody { flex:1; min-width:0; font-size:14.5px; overflow-wrap:anywhere; }
