@@ -475,7 +475,7 @@ document.addEventListener("click", event => {
 });
 loadPending();
 // refresh so background transcription text shows up; skip while editing a note
-setInterval(() => { if(!document.querySelector(".pending-edit.open")) loadPending(); }, 12000);
+setInterval(() => { if(!document.querySelector(".pending-text[data-editing]")) loadPending(); }, 12000);
 </script>
 </body>
 </html>
