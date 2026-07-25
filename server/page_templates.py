@@ -24,6 +24,7 @@ _CAPTURE_BODY = """
         <input id="capCam" type="file" accept="image/*" capture="environment" multiple onchange="addImages(this)" />
         <input id="capGal" type="file" accept="image/*" multiple onchange="addImages(this)" />
       </div>
+      <label class="orig-toggle small"><input type="checkbox" id="origToggle" /> 上传原图（不压缩；WB／显微等数据图用）</label>
       <div class="archive-row">
         <button class="green" id="archiveBtn" onclick="archive()">__I_ARCH__ 打包存档</button>
       </div>
@@ -91,10 +92,48 @@ function renderThumbs(){
   const audioHtml = heldAudio.blob ? `<span class="thumb" style="display:flex;align-items:center;justify-content:center;color:var(--muted)">${svgIcon("audio",24)}<button class="rm" onclick="rmAudio()">${x}</button></span>` : "";
   box.innerHTML = imageHtml + fileHtml + audioHtml;
 }
-function addImages(input){
-  for(const f of input.files) addHeldFile(f);
+async function addImages(input){
+  const files = Array.from(input.files);
   input.value = "";
-  renderThumbs();
+  const compress = !(document.getElementById("origToggle") && document.getElementById("origToggle").checked);
+  for(const f of files){
+    const out = compress ? await compressImage(f) : f;
+    addHeldFile(out);
+    renderThumbs();
+  }
+}
+
+// Downscale phone photos before upload (max edge 2560, JPEG ~85%). A 12MP photo
+// (~4-5 MB) becomes ~0.5-1 MB, so the slow phone upstream sends far less. Returns
+// the original if it's not a raster image, already small, or compression fails.
+async function loadBitmap(file){
+  if(window.createImageBitmap){
+    try { return await createImageBitmap(file, {imageOrientation:"from-image"}); } catch(e){}
+    try { return await createImageBitmap(file); } catch(e){}
+  }
+  return await new Promise((resolve, reject) => {
+    const img = new Image(); const url = URL.createObjectURL(file);
+    img.onload = () => { resolve(img); };
+    img.onerror = reject; img.src = url;
+  });
+}
+async function compressImage(file, maxEdge=2560, quality=0.85){
+  try {
+    if(!file.type || !file.type.startsWith("image/") || /svg/i.test(file.type)) return file;
+    const src = await loadBitmap(file);
+    const iw = src.width || src.naturalWidth, ih = src.height || src.naturalHeight;
+    const maxDim = Math.max(iw, ih);
+    const scale = Math.min(1, maxEdge/maxDim);
+    if(scale >= 1 && file.size < 1.5*1024*1024){ if(src.close) src.close(); return file; }
+    const w = Math.max(1, Math.round(iw*scale)), h = Math.max(1, Math.round(ih*scale));
+    const canvas = document.createElement("canvas"); canvas.width = w; canvas.height = h;
+    canvas.getContext("2d").drawImage(src, 0, 0, w, h);
+    if(src.close) src.close();
+    const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", quality));
+    if(!blob || blob.size >= file.size) return file;
+    const name = (file.name || "photo").replace(/\.[^.]+$/, "") + ".jpg";
+    return new File([blob], name, {type:"image/jpeg", lastModified: Date.now()});
+  } catch(e){ return file; }
 }
 function isStagedAttachment(value){
   return !!(value && typeof value === "object" && typeof value.rel_path === "string" && value.rel_path);

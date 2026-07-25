@@ -128,6 +128,37 @@ def transcribe_path_once(path: str) -> str:
     return _transcribe_file(path)
 
 
+def process_inbox_audio_async(entry_id: int, path: str) -> None:
+    """Remux (fragmented phone MP4 → faststart) then transcribe an inbox capture's
+    audio, all in the background — so the upload response returns immediately
+    instead of blocking on ffmpeg + ASR."""
+    def _job():
+        try:
+            from server import audio_tools
+            audio_tools.remux_to_faststart_mp4(path)
+        except Exception as exc:
+            print(f"[audio] inbox {entry_id} remux failed: {exc}")
+        if not transcription_available():
+            return
+        try:
+            text = _transcribe_file(path)
+        except Exception as exc:
+            print(f"[voice] inbox transcription failed for {entry_id}: {exc}")
+            return
+        if not text:
+            return
+        try:
+            entry = db_ops.get_inbox_entry(entry_id)
+            current = (entry.get("text") or "").strip() if entry else ""
+            merged = (current + "\n" + text).strip() if current else text
+            db_ops.update_inbox_entry(entry_id, text=merged)
+            print(f"[voice] inbox {entry_id} transcribed: {len(text)} chars")
+        except Exception as exc:
+            print(f"[voice] inbox {entry_id} update failed: {exc}")
+
+    threading.Thread(target=_job, daemon=True, name=f"eln-inbox-audio-{entry_id}").start()
+
+
 def transcribe_inbox_entry_async(entry_id: int, path: str) -> None:
     """Transcribe an inbox capture's audio in the background and merge the text
     into the entry. Non-blocking so archiving stays instant even for long clips

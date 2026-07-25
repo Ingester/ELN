@@ -876,6 +876,8 @@ _CAPTURE_CSS = _NAV_CSS + """
       display:flex; align-items:center; justify-content:center; box-shadow:none; }
     .cap-tools { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
     .cap-tools .button, .cap-tools button { min-height:44px; flex:1; }
+    .orig-toggle { display:flex; align-items:center; gap:7px; margin-top:10px; color:var(--muted); cursor:pointer; }
+    .orig-toggle input { width:16px; height:16px; flex:0 0 auto; }
     .thumb.ph { display:flex; align-items:center; justify-content:center; color:var(--faint); }
     .file-chip { display:flex; align-items:center; gap:8px; max-width:100%; min-height:44px;
       border:1px solid var(--line); border-radius:10px; background:#fbfaf7; padding:7px 34px 7px 10px;
@@ -2821,21 +2823,14 @@ async def upload_inbox_media(
         raise HTTPException(400, "文件为空")
     rel_path = f"inbox/{entry_id}/{filename}"
     if kind == "audio":
-        # Remux fragmented phone MP4 → plain faststart MP4 so <audio> plays it fully.
-        try:
-            from server import audio_tools
-            audio_tools.remux_to_faststart_mp4(filepath)
-        except Exception as exc:
-            print(f"[audio] remux error for {entry_id}: {exc}")
         updated = db_ops.set_inbox_audio(entry_id, rel_path)
-        # Transcribe in the background: long clips take the slower recording-file
-        # recognition path, so we don't block the archive request on it.
+        # Remux (fragmented phone MP4 → faststart) AND transcribe in the background
+        # so the upload returns immediately instead of blocking on ~1s of ffmpeg.
         try:
             from server import voice as voice_worker
-            if voice_worker.transcription_available():
-                voice_worker.transcribe_inbox_entry_async(entry_id, filepath)
+            voice_worker.process_inbox_audio_async(entry_id, filepath)
         except Exception as exc:
-            print(f"[voice] inbox transcription trigger failed for {entry_id}: {exc}")
+            print(f"[voice] inbox audio processing trigger failed for {entry_id}: {exc}")
     else:
         updated = db_ops.add_inbox_image(entry_id, rel_path)
     return _inbox_to_dict(updated)
