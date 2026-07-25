@@ -207,7 +207,7 @@ TIMER_DOCK_HTML = """
   #elnDockForm { display: none; background: #fff; border: 1px solid var(--line); border-radius: 14px;
     padding: 12px; box-shadow: 0 10px 28px rgba(0,0,0,.14); width: 230px; }
   #elnDockForm.open { display: block; }
-  #elnDockForm input { width: 100%; border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px 10px;
+  #elnDockForm input, #elnDockForm select { width: 100%; border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px 10px;
     font: inherit; margin-bottom: 8px; min-height: 40px; box-sizing: border-box; }
   #elnDockForm .row { display: flex; gap: 8px; }
   #elnDockForm button { flex: 1; border: 0; border-radius: 10px; min-height: 38px; cursor: pointer; font: inherit; font-weight: 500; }
@@ -224,6 +224,9 @@ TIMER_DOCK_HTML = """
       <button type="button" class="mode off" id="elnModeAlarm" onclick="ElnDock.setMode('alarm')">闹钟</button>
     </div>
     <input id="elnDockLabel" placeholder="名称（如：孵育）" />
+    <select id="elnDockExperiment" aria-label="关联实验">
+      <option value="">不关联实验</option>
+    </select>
     <input id="elnDockMin" type="number" inputmode="decimal" min="0.1" step="0.5" placeholder="分钟" />
     <input id="elnDockAt" type="datetime-local" style="display:none" />
     <div class="row">
@@ -238,9 +241,10 @@ TIMER_DOCK_HTML = """
   const QT_KEY = "eln.quicktimers";
   const XICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
   let serverTimers = [];
+  let serverQuick = [];
+  const alertedQuick = new Set();
   let audioCtx = null;
-  function loadQuick(){ try { return JSON.parse(localStorage.getItem(QT_KEY) || "[]"); } catch { return []; } }
-  function saveQuick(list){ localStorage.setItem(QT_KEY, JSON.stringify(list)); }
+  let experimentOptionsLoaded = false;
   function fmt(sec){ sec = Math.max(0, Math.floor(sec)); const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
     const ms = String(m).padStart(2,"0")+":"+String(s).padStart(2,"0"); return h ? h+":"+ms : ms; }
   function unlockAudio(){ try { if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)(); if(audioCtx.state==="suspended") audioCtx.resume(); } catch {} }
@@ -254,6 +258,42 @@ TIMER_DOCK_HTML = """
       return { experiment_id:t.experiment_id, step_id:t.step_id, label:(t.step_title||("Step "+((t.step_index??0)+1))),
         exp:t.experiment_name||"", status:t.status, endAt:t.status==="running"?updated+t.remaining_seconds*1000:null,
         overBase:t.overtime_seconds||0, overSince:updated }; }); } catch {} }
+  async function pollQuick(){ try { const res = await fetch("/api/quick-alarms?status=active,ringing", {headers:{"Accept":"application/json"}});
+    if(!res.ok) return; serverQuick = await res.json(); } catch {} }
+  function contextExperiment(){
+    if(location.pathname === "/capture") return "";
+    const fromUrl = new URLSearchParams(location.search).get("experiment_id");
+    if(fromUrl) return fromUrl;
+    if(location.pathname === "/run" || location.pathname === "/mobile"){
+      return localStorage.getItem("eln.mobile.selectedExperiment") || "";
+    }
+    return "";
+  }
+  async function loadExperimentOptions(){
+    const select = document.getElementById("elnDockExperiment");
+    if(!select) return;
+    const wanted = select.value || contextExperiment();
+    if(!experimentOptionsLoaded){
+      try {
+        const res = await fetch("/api/experiment_summaries", {headers:{"Accept":"application/json"}});
+        if(res.ok){
+          const experiments = await res.json();
+          select.innerHTML = '<option value="">不关联实验</option>' + experiments.map(exp =>
+            '<option value="'+String(exp.id)+'">'+escHtml("#"+exp.id+" "+exp.name)+'</option>'
+          ).join("");
+          experimentOptionsLoaded = true;
+        }
+      } catch {}
+    }
+    select.value = Array.from(select.options).some(o => o.value === String(wanted)) ? String(wanted) : "";
+  }
+  async function migrateLegacyQuick(){ let legacy=[]; try { legacy=JSON.parse(localStorage.getItem(QT_KEY)||"[]"); } catch {}
+    for(const q of legacy){ if(!q || !q.endAt || q.endAt<=Date.now()) continue;
+      try { await fetch("/api/quick-alarms", {method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({id:String(q.id||""),label:q.label||"",kind:q.kind||"timer",
+          due_at:new Date(q.endAt).toISOString(),experiment_id:null})}); } catch {} }
+    if(legacy.length) localStorage.removeItem(QT_KEY);
+    await pollQuick(); }
   function render(){ const box = document.getElementById("elnDockPills"); if(!box) return; const now = Date.now(); const parts = [];
     for(const t of serverTimers){ let over=false, secs=0;
       if(t.status==="running" && t.endAt){ secs = Math.round((t.endAt-now)/1000); if(secs<=0){ over=true; secs=-secs; } }
@@ -261,28 +301,28 @@ TIMER_DOCK_HTML = """
       const label = t.label + (t.exp ? " · "+t.exp : "");
       parts.push('<button class="dock-pill'+(over?" over":"")+'" onclick="ElnDock.openStep('+t.experiment_id+','+t.step_id+')">'
         +'<span class="t">'+(over?"+":"")+fmt(secs)+'</span><span class="n">'+escHtml(label)+'</span></button>'); }
-    let quick = loadQuick(); let dirty=false;
-    for(const q of quick){ const remain = Math.round((q.endAt-now)/1000); const over = remain<=0;
-      if(over && !q.alerted){ q.alerted=true; dirty=true; alertOnce(); }
+    for(const q of serverQuick){ const endAt=Date.parse(q.due_at||""); const remain=Math.round((endAt-now)/1000);
+      const over=q.status==="ringing" || remain<=0;
+      if(q.status==="ringing" && !alertedQuick.has(q.id)){ alertedQuick.add(q.id); alertOnce(); }
       parts.push('<button class="dock-pill'+(over?" over":"")+'" onclick="ElnDock.dismissQuick(\\''+q.id+'\\')">'
-        +'<span class="t">'+(over?"+"+fmt(-remain):fmt(remain))+'</span><span class="n">'+escHtml(q.label||"快速计时")+'</span>'
+        +'<span class="t">'+(over?"+"+fmt(-remain):fmt(remain))+'</span><span class="n">'+escHtml(q.label||(q.kind==="alarm"?"闹钟":"快速计时"))+'</span>'
         +'<span class="x">'+XICON+'</span></button>'); }
-    if(dirty) saveQuick(quick);
-    box.innerHTML = parts.join(""); box.style.display = parts.length ? "flex" : "none";
+    const hidePills = ["/capture", "/run", "/mobile"].includes(location.pathname);
+    box.innerHTML = parts.join(""); box.style.display = !hidePills && parts.length ? "flex" : "none";
     box.style.flexDirection = "column"; box.style.gap = "8px"; box.style.alignItems = "flex-start"; }
   function escHtml(v){ return String(v ?? "").replace(/[&<>"']/g, s => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[s])); }
   let dockMode = "timer";
   window.ElnDock = {
     toggleForm(show){ unlockAudio(); const f = document.getElementById("elnDockForm");
       const open = show===undefined ? !f.classList.contains("open") : show; f.classList.toggle("open", open);
-      if(open) ElnDock.setMode(dockMode); },
+      if(open){ loadExperimentOptions(); ElnDock.setMode(dockMode); } },
     setMode(m){ dockMode = m;
       document.getElementById("elnDockMin").style.display = m==="alarm" ? "none" : "block";
       document.getElementById("elnDockAt").style.display = m==="alarm" ? "block" : "none";
       document.getElementById("elnModeTimer").className = "mode " + (m==="alarm"?"off":"go");
       document.getElementById("elnModeAlarm").className = "mode " + (m==="alarm"?"go":"off");
       setTimeout(() => { const el = document.getElementById(m==="alarm"?"elnDockAt":"elnDockMin"); if(el) el.focus(); }, 40); },
-    startQuick(){ const label = document.getElementById("elnDockLabel").value.trim(); let endAt, kind;
+    async startQuick(){ const label = document.getElementById("elnDockLabel").value.trim(); let endAt, kind;
       if(dockMode==="alarm"){ const v = document.getElementById("elnDockAt").value;
         endAt = v ? new Date(v).getTime() : NaN;
         if(!endAt || endAt <= Date.now()){ document.getElementById("elnDockAt").focus(); return; }
@@ -290,16 +330,19 @@ TIMER_DOCK_HTML = """
       } else { const min = parseFloat(document.getElementById("elnDockMin").value);
         if(!min || min<=0){ document.getElementById("elnDockMin").focus(); return; }
         endAt = Date.now()+Math.round(min*60000); kind = "timer"; }
-      const list = loadQuick();
-      list.push({ id: Date.now()+"-"+Math.random().toString(16).slice(2), label, endAt, alerted:false, kind });
-      saveQuick(list);
+      const expRaw = document.getElementById("elnDockExperiment").value;
+      const experimentId = expRaw && /^[0-9]+$/.test(expRaw) ? Number(expRaw) : null;
+      const res = await fetch("/api/quick-alarms", {method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({label,kind,due_at:new Date(endAt).toISOString(),experiment_id:experimentId})});
+      if(!res.ok) return;
       document.getElementById("elnDockMin").value=""; document.getElementById("elnDockAt").value=""; document.getElementById("elnDockLabel").value="";
-      ElnDock.toggleForm(false); render(); },
-    dismissQuick(id){ saveQuick(loadQuick().filter(q => q.id !== id)); render(); },
+      ElnDock.toggleForm(false); await pollQuick(); render(); },
+    async dismissQuick(id){ await fetch("/api/quick-alarms/"+encodeURIComponent(id)+"/dismiss", {method:"POST"});
+      serverQuick=serverQuick.filter(q=>q.id!==id); alertedQuick.delete(id); render(); },
     openStep(expId, stepId){ location.href = "/run?experiment_id="+expId+"&step_id="+stepId; }
   };
   document.getElementById("elnDockAdd").addEventListener("click", () => ElnDock.toggleForm());
-  pollServer(); setInterval(pollServer, 5000); setInterval(render, 1000); render();
+  pollServer(); migrateLegacyQuick(); setInterval(pollServer, 5000); setInterval(pollQuick, 5000); setInterval(render, 1000); render();
 })();
 </script>
 """.replace("__ADD_ICON__", icon("timer", 20).replace("\n", ""))

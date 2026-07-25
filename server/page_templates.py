@@ -30,12 +30,18 @@ _CAPTURE_BODY = """
       <div class="small" id="capHint" style="margin-top:8px"></div>
     </section>
 
+    <section class="capture-clocks" id="captureClocks" hidden>
+      <div class="capture-clocks-head">闹钟与倒计时</div>
+      <div class="capture-clock-list" id="captureClockList"></div>
+    </section>
+
     <div class="pending-head">
       <h2>待归档</h2>
       <a class="edit-link" href="/inbox">全部 · 历史 __I_ARR__</a>
     </div>
     <div id="pendingList"></div>
   </main>
+__TIMER_DOCK__
 __NAV__
 <script>
 __ICON_JS__
@@ -423,6 +429,98 @@ async function loadPending(){
   } catch {}
 }
 
+let captureTimers = [];
+let captureQuick = [];
+
+function clockTime(seconds){
+  seconds = Math.max(0, Math.floor(Number(seconds) || 0));
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function captureClockLink(experimentId, stepId){
+  if(!experimentId) return "";
+  const step = stepId ? `&step_id=${encodeURIComponent(stepId)}` : "";
+  return `/run?experiment_id=${encodeURIComponent(experimentId)}${step}`;
+}
+
+function renderCaptureClocks(){
+  const panel = document.getElementById("captureClocks");
+  const list = document.getElementById("captureClockList");
+  if(!panel || !list) return;
+  const now = Date.now();
+  const items = [];
+
+  for(const timer of captureTimers){
+    const updated = Date.parse(timer.updated_at || "") || now;
+    let remaining;
+    let over = timer.status !== "running";
+    if(timer.status === "running"){
+      const endAt = updated + Number(timer.remaining_seconds || 0) * 1000;
+      remaining = Math.round((endAt - now) / 1000);
+      if(remaining <= 0){ over = true; remaining = -remaining; }
+    } else {
+      remaining = Number(timer.overtime_seconds || 0) + Math.round((now - updated) / 1000);
+    }
+    const href = captureClockLink(timer.experiment_id, timer.step_id);
+    items.push(`<div class="capture-clock ${over?"over":""}">
+      <a class="capture-clock-main" ${href?`href="${href}"`:""}>
+        ${svgIcon("timer",15)}
+        <b>${over?"+":""}${clockTime(remaining)}</b>
+        <span class="capture-clock-copy"><span>${esc(timer.step_title || "步骤计时")}</span><small>${esc(timer.experiment_name || "")}</small></span>
+      </a>
+      <button class="capture-clock-close" onclick="closeCaptureTimer(${timer.experiment_id},${timer.step_id},${over})" title="关闭计时" aria-label="关闭计时">${svgIcon("x",15)}</button>
+    </div>`);
+  }
+
+  for(const alarm of captureQuick){
+    const remainingRaw = Math.round((Date.parse(alarm.due_at || "") - now) / 1000);
+    const over = alarm.status === "ringing" || remainingRaw <= 0;
+    const href = captureClockLink(alarm.experiment_id, null);
+    items.push(`<div class="capture-clock ${over?"over":""}">
+      <a class="capture-clock-main" ${href?`href="${href}"`:""}>
+        ${svgIcon(alarm.kind === "alarm" ? "clock" : "timer",15)}
+        <b>${over?"+":""}${clockTime(Math.abs(remainingRaw))}</b>
+        <span class="capture-clock-copy"><span>${esc(alarm.label || (alarm.kind === "alarm" ? "闹钟" : "快速计时"))}</span><small>${esc(alarm.experiment_name || "")}</small></span>
+      </a>
+      <button class="capture-clock-close" onclick='dismissCaptureQuick(${JSON.stringify(alarm.id)})' title="关闭计时" aria-label="关闭计时">${svgIcon("x",15)}</button>
+    </div>`);
+  }
+
+  panel.hidden = items.length === 0;
+  list.innerHTML = items.join("");
+}
+
+async function closeCaptureTimer(experimentId, stepId, overtime){
+  try {
+    await api(`/api/timers/${experimentId}/${stepId}/${overtime ? "confirm" : "pause"}`, {method:"POST"});
+    await loadCaptureClocks();
+  } catch {}
+}
+
+async function dismissCaptureQuick(id){
+  try {
+    await api(`/api/quick-alarms/${encodeURIComponent(id)}/dismiss`, {method:"POST"});
+    await loadCaptureClocks();
+  } catch {}
+}
+
+async function loadCaptureClocks(){
+  try {
+    const [timers, quick] = await Promise.all([
+      api("/api/timers/active"),
+      api("/api/quick-alarms?status=active,ringing"),
+    ]);
+    captureTimers = Array.isArray(timers) ? timers : [];
+    captureQuick = Array.isArray(quick) ? quick : [];
+    renderCaptureClocks();
+  } catch {}
+}
+
 // Click the note text to edit it right there (Markdown-friendly, no popup box).
 function openPendingEdit(id){ startPendingEdit(id); }
 function startPendingEdit(id){
@@ -474,8 +572,11 @@ document.addEventListener("click", event => {
   document.getElementById("capHint").textContent = "文件还在上传，完成前不要切换页面。";
 });
 loadPending();
+loadCaptureClocks();
 // refresh so background transcription text shows up; skip while editing a note
 setInterval(() => { if(!document.querySelector(".pending-text[data-editing]")) loadPending(); }, 12000);
+setInterval(renderCaptureClocks, 1000);
+setInterval(loadCaptureClocks, 5000);
 </script>
 </body>
 </html>
@@ -812,27 +913,47 @@ function setHeaderMode(v){
   if(board) renderBoardAlarms();
 }
 
-// Show active dock timers/alarms (localStorage) as live countdowns on the board.
+// Keep unassigned alarms at the top; experiment alarms live on their cards.
 function renderBoardAlarms(){
   const el = document.getElementById("boardAlarms");
   if(!el || view !== "board") return;
-  let list = [];
-  try { list = JSON.parse(localStorage.getItem("eln.quicktimers") || "[]"); } catch {}
-  if(!list.length){ el.style.display = "none"; el.innerHTML = ""; return; }
+  const visibleExperimentIds = new Set(experiments.map(e => String(e.id)));
+  const unassigned = boardQuick.filter(q =>
+    q.experiment_id == null || !visibleExperimentIds.has(String(q.experiment_id))
+  );
+  if(!unassigned.length){ el.style.display = "none"; el.innerHTML = ""; return; }
   const now = Date.now();
   el.style.display = "flex";
-  el.innerHTML = list.map(q => {
-    const remain = Math.round((q.endAt - now) / 1000);
-    const over = remain <= 0;
+  el.innerHTML = unassigned.map(q => {
+    const remain = Math.round((Date.parse(q.due_at || "") - now) / 1000);
+    const over = q.status === "ringing" || remain <= 0;
     const icon = svgIcon(q.kind === "alarm" ? "clock" : "timer", 14);
     return `<span class="board-alarm ${over?"over":""}">${icon}<b>${(over?"+":"")+fmtHMS(Math.abs(remain))}</b><span class="ba-label">${esc(q.label || (q.kind==="alarm"?"闹钟":"计时"))}</span></span>`;
   }).join("");
 }
 
+function renderExperimentAlarms(){
+  if(view !== "board") return;
+  const now = Date.now();
+  for(const e of experiments){
+    const el = document.getElementById("bcalarms-" + e.id);
+    if(!el) continue;
+    const alarms = boardQuick.filter(q => String(q.experiment_id) === String(e.id));
+    el.style.display = alarms.length ? "flex" : "none";
+    el.innerHTML = alarms.map(q => {
+      const remain = Math.round((Date.parse(q.due_at || "") - now) / 1000);
+      const over = q.status === "ringing" || remain <= 0;
+      const icon = svgIcon(q.kind === "alarm" ? "clock" : "timer", 13);
+      const fallback = q.kind === "alarm" ? "闹钟" : "计时";
+      return `<span class="bc-alarm ${over?"over":""}">${icon}<b>${(over?"+":"")+fmtHMS(Math.abs(remain))}</b><span>${esc(q.label || fallback)}</span></span>`;
+    }).join("");
+  }
+}
+
 async function showBoard(){
   setHeaderMode("board");
   renderBoard(experiments);
-  await loadBoardTimers();
+  await Promise.all([loadBoardTimers(), loadBoardQuick()]);
   boardTimerKeys = Object.keys(boardTimers).sort().join(",");
   if(view === "board") renderBoard(experiments);
 }
@@ -852,6 +973,7 @@ function renderBoard(exps){
     return `<div class="board-card" onclick="enterExperiment('${e.id}')">
       <div class="bc-top"><span class="bc-name">${esc(e.name)}</span><span class="bc-badge s-${esc(e.status)}">${esc(label)}</span></div>
       <div class="progress"><div style="width:${pct}%"></div></div>
+      <div class="bc-alarms" id="bcalarms-${e.id}"></div>
       <div class="bc-foot">
         <div class="bc-foot-l"><span class="bc-meta">#${esc(e.id)} · ${done}/${total} 步 · ${pct}%</span>${timerChip}</div>
         <button class="bc-abandon" onclick="event.stopPropagation(); abandonExperiment('${e.id}', ${esc(JSON.stringify(e.name))})">放弃</button>
@@ -862,6 +984,7 @@ function renderBoard(exps){
 }
 
 let boardTimers = {};
+let boardQuick = [];
 let boardTimerKeys = "";
 
 // like fmt() but shows hours for long timers: 16:00:00, otherwise MM:SS
@@ -896,9 +1019,15 @@ async function loadBoardTimers(){
   } catch {}
 }
 
+async function loadBoardQuick(){
+  try { boardQuick = await api("/api/quick-alarms?status=active,ringing"); }
+  catch { boardQuick = []; }
+}
+
 function tickBoardTimers(){
   if(view !== "board") return;
   renderBoardAlarms();
+  renderExperimentAlarms();
   const now = Date.now();
   for(const key in boardTimers){
     const el = document.getElementById("bctimer-" + key);
@@ -915,7 +1044,7 @@ function tickBoardTimers(){
 
 async function pollBoardTimers(){
   if(view !== "board") return;
-  await loadBoardTimers();
+  await Promise.all([loadBoardTimers(), loadBoardQuick()]);
   const keys = Object.keys(boardTimers).sort().join(",");
   if(keys !== boardTimerKeys){ boardTimerKeys = keys; if(view === "board") renderBoard(experiments); }
   else { tickBoardTimers(); }
@@ -2457,4 +2586,3 @@ async function initRunner(){
 initRunner();
 </script>
 """
-

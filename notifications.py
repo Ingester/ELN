@@ -42,6 +42,22 @@ def notify_timer_finished(step_title: str, experiment_name: str) -> None:
     ).start()
 
 
+def notify_alarm(label: str, experiment_name: str = "") -> None:
+    """Fire a persistent quick alarm from the ELN background process."""
+    title = "闹钟"
+    body = f"{experiment_name} · {label}" if experiment_name else label
+    _alert_stop_event.clear()
+    threading.Thread(
+        target=_send_notification,
+        args=(title, body),
+        daemon=True,
+    ).start()
+    threading.Thread(
+        target=_play_sound_loop,
+        daemon=True,
+    ).start()
+
+
 def stop_alert_sound() -> None:
     """Stop any looping timer alert as soon as practical."""
     _alert_stop_event.set()

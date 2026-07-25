@@ -13,5 +13,14 @@ dist/
 build/
 *.zip
 ELN_Data/
+*.db
+*.sqlite
+*.sqlite3
+photos/
+uploads/
+reports/
+audio/
 cloudflare/config.yml
 cloudflare/*.json
+*.pem
+*.key

@@ -420,6 +420,14 @@ class TimerSync(BaseModel):
     elapsed_seconds: Optional[int] = None
 
 
+class QuickAlarmCreate(BaseModel):
+    id: Optional[str] = None
+    label: str = ""
+    kind: str = "alarm"
+    due_at: str
+    experiment_id: Optional[int] = None
+
+
 class ProtocolCreate(BaseModel):
     protocol_json: str          # full ProtocolDefinition JSON string
 
@@ -884,6 +892,28 @@ _CAPTURE_CSS = _NAV_CSS + """
     #capMic.rec { background:var(--clay); border-color:var(--clay); color:#fff; }
     .archive-row { margin-top:16px; display:flex; gap:10px; }
     .archive-row button { flex:1; min-height:50px; font-size:15.5px; }
+    .capture-clocks { margin:18px 2px 0; }
+    .capture-clocks[hidden] { display:none; }
+    .capture-clocks-head { margin-bottom:7px; color:var(--faint); font-size:12px; letter-spacing:.04em; }
+    .capture-clock-list { display:flex; flex-direction:column; gap:6px; }
+    .capture-clock { display:flex; align-items:stretch; min-width:0;
+      border:1px solid #ead9aa; border-radius:8px; background:#fdf7e7; color:#725d1d;
+      box-shadow:none; overflow:hidden; }
+    .capture-clock:hover { border-color:#d9bf78; }
+    .capture-clock.over { border-color:#a63a24; background:#a63a24; color:#fff; }
+    .capture-clock-main { display:flex; align-items:center; gap:8px; min-width:0; flex:1;
+      padding:9px 8px 9px 11px; color:inherit; text-decoration:none; }
+    .capture-clock svg { flex:0 0 auto; width:15px; height:15px; stroke:currentColor; fill:none; stroke-width:2; }
+    .capture-clock b { flex:0 0 auto; min-width:54px; font-size:13px; font-variant-numeric:tabular-nums; }
+    .capture-clock-copy { display:flex; flex-direction:column; min-width:0; flex:1; line-height:1.25; }
+    .capture-clock-copy > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13.5px; font-weight:600; }
+    .capture-clock-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11.5px; opacity:.72; }
+    .capture-clock-close { width:40px; min-height:0; border:0; border-left:1px solid rgba(114,93,29,.18);
+      border-radius:0; background:transparent; color:inherit; padding:0; display:flex; align-items:center;
+      justify-content:center; cursor:pointer; }
+    .capture-clock-close:hover { background:rgba(0,0,0,.08); }
+    .capture-clock.over .capture-clock-close { border-left-color:rgba(255,255,255,.25); }
+    #elnDockPills { display:none !important; }
     .pending-head { display:flex; justify-content:space-between; align-items:center; margin:22px 2px 8px; }
     .pending-head h2 { margin:0; font-size:12px; color:var(--faint); text-transform:none; letter-spacing:.04em; }
     .pending-head .edit-link { font-size:13px; }
@@ -918,6 +948,7 @@ def capture_page(request: Request):
         "__I_CAM__": ("camera", 18), "__I_IMG__": ("image", 18),
         "__I_ARCH__": ("check", 18), "__I_ARR__": ("arrow-right", 15),
     })
+    body = body.replace("__TIMER_DOCK__", web_ui.TIMER_DOCK_HTML)
     body = body.replace("__NAV__", _bottom_nav("capture", _flet_home_url(request)))
     return _html_response(web_ui.page_head("速记 · ELN", _CAPTURE_CSS) + body,
                           headers={"Cache-Control": "no-store, max-age=0"})
@@ -1483,6 +1514,14 @@ _RUNNER_CSS = """
       font-variant-numeric:tabular-nums; color:#8a6d1e; background:#fdf1d6; border-radius:999px; padding:2px 8px; white-space:nowrap; }
     .bc-timer.over { color:#fff; background:#a63a24; }
     .bc-timer svg { width:12px; height:12px; stroke:currentColor; fill:none; stroke-width:2; }
+    .bc-alarms { display:none; flex-wrap:wrap; gap:6px; margin-top:10px; }
+    .bc-alarm { display:inline-flex; align-items:center; gap:5px; min-width:0; max-width:100%;
+      padding:4px 9px; border-radius:6px; background:#fdf1d6; color:#8a6d1e;
+      font-size:12px; font-variant-numeric:tabular-nums; }
+    .bc-alarm.over { background:#a63a24; color:#fff; }
+    .bc-alarm b { flex:0 0 auto; font-weight:700; }
+    .bc-alarm span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .bc-alarm svg { flex:0 0 auto; width:13px; height:13px; stroke:currentColor; fill:none; stroke-width:2; }
     .bc-abandon { min-height:0; padding:2px 4px; background:none; box-shadow:none; border:0;
       color:var(--faint); font-size:12px; font-weight:500; cursor:pointer; }
     .bc-abandon:hover { color:#c0503a; text-decoration:underline; }
@@ -2007,6 +2046,52 @@ def list_active_timers():
     return result
 
 
+@app.get("/api/quick-alarms")
+def list_quick_alarms(status: Optional[str] = "active,ringing"):
+    statuses = [
+        item.strip()
+        for item in str(status or "").split(",")
+        if item.strip()
+    ]
+    return db_ops.list_quick_alarms(statuses or None)
+
+
+@app.post("/api/quick-alarms", status_code=201)
+def create_quick_alarm(body: QuickAlarmCreate):
+    try:
+        due = datetime.fromisoformat(body.due_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid alarm time") from exc
+    if due.tzinfo is None:
+        raise HTTPException(400, "Alarm time must include a timezone")
+    due_utc = due.astimezone(timezone.utc)
+    if due_utc <= datetime.now(timezone.utc):
+        raise HTTPException(400, "Alarm time must be in the future")
+    if body.experiment_id is not None and not db_ops.get_experiment(body.experiment_id):
+        raise HTTPException(404, "Experiment not found")
+    alarm_id = str(body.id or uuid.uuid4())
+    return db_ops.create_quick_alarm(
+        alarm_id=alarm_id,
+        label=body.label.strip(),
+        kind=body.kind,
+        due_at=due_utc.isoformat(),
+        experiment_id=body.experiment_id,
+    )
+
+
+@app.post("/api/quick-alarms/{alarm_id}/dismiss")
+def dismiss_quick_alarm(alarm_id: str):
+    alarm = db_ops.dismiss_quick_alarm(alarm_id)
+    if not alarm:
+        raise HTTPException(404, "Alarm not found")
+    try:
+        from notifications import stop_alert_sound
+        stop_alert_sound()
+    except Exception:
+        pass
+    return alarm
+
+
 def _timer_to_dict(timer) -> dict:
     return {
         "id": timer.id,
@@ -2352,6 +2437,39 @@ def _startup_prune_staged():
         _prune_staged()
     except Exception as exc:
         print(f"[staged] startup prune failed: {exc}")
+
+
+def _notify_managed_timer_finished(state) -> None:
+    from notifications import notify_timer_finished
+
+    step = db_ops.get_step(state.step_id)
+    experiment = db_ops.get_experiment(state.experiment_id)
+    notify_timer_finished(
+        step.title if step else "步骤",
+        experiment.name if experiment else "实验",
+    )
+
+
+@app.on_event("startup")
+def _startup_background_schedulers():
+    """Keep timers and alarms alive even when no browser page is open."""
+    from alarm_manager import get_alarm_manager
+    from timer_manager import get_timer_manager
+
+    timer_manager = get_timer_manager()
+    timer_manager.subscribe_finished(_notify_managed_timer_finished)
+    timer_manager.restore_from_db()
+    timer_manager.start()
+    get_alarm_manager().start()
+
+
+@app.on_event("shutdown")
+def _shutdown_background_schedulers():
+    from alarm_manager import get_alarm_manager
+    from timer_manager import get_timer_manager
+
+    get_alarm_manager().stop()
+    get_timer_manager().stop()
 
 
 def _attach_inbox_files_to_step(entry: dict, step_id: int) -> int:

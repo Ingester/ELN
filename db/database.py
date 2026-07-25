@@ -151,6 +151,18 @@ CREATE TABLE IF NOT EXISTS timers (
     updated_at          TEXT    NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS quick_alarms (
+    id                  TEXT    PRIMARY KEY,
+    label               TEXT    NOT NULL DEFAULT '',
+    kind                TEXT    NOT NULL DEFAULT 'alarm',
+    due_at               TEXT    NOT NULL,
+    status              TEXT    NOT NULL DEFAULT 'active',
+    experiment_id       INTEGER,
+    created_at           TEXT    NOT NULL,
+    fired_at             TEXT,
+    dismissed_at         TEXT
+);
+
 CREATE TABLE IF NOT EXISTS timer_events (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     experiment_id       INTEGER NOT NULL,
@@ -240,6 +252,7 @@ CREATE INDEX IF NOT EXISTS idx_inbox_status ON inbox_entries(status, created_at)
 CREATE INDEX IF NOT EXISTS idx_voice_notes_experiment ON voice_notes(experiment_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_steps_experiment ON steps(experiment_id, step_index);
 CREATE INDEX IF NOT EXISTS idx_timers_experiment ON timers(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_quick_alarms_due ON quick_alarms(status, due_at);
 CREATE INDEX IF NOT EXISTS idx_timer_events_step ON timer_events(experiment_id, step_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_box_slots_box ON box_slots(box_id);
 CREATE INDEX IF NOT EXISTS idx_storage_experiment ON storage_items(experiment_id);
@@ -696,6 +709,100 @@ def list_experiment_timers(experiment_id: int) -> list[TimerRecord]:
             (experiment_id,),
         ).fetchall()
     return [TimerRecord.from_row(tuple(r)) for r in rows]
+
+
+# ─────────────────────────────────────────────
+# Persistent quick timers / alarms
+# ─────────────────────────────────────────────
+
+def create_quick_alarm(
+    alarm_id: str,
+    label: str,
+    kind: str,
+    due_at: str,
+    experiment_id: Optional[int] = None,
+) -> dict[str, Any]:
+    now = _now()
+    normalized_kind = kind if kind in ("alarm", "timer") else "alarm"
+    with db_conn() as conn:
+        conn.execute(
+            """INSERT INTO quick_alarms
+               (id, label, kind, due_at, status, experiment_id, created_at)
+               VALUES (?, ?, ?, ?, 'active', ?, ?)
+               ON CONFLICT(id) DO NOTHING""",
+            (alarm_id, label or "", normalized_kind, due_at, experiment_id, now),
+        )
+    return get_quick_alarm(alarm_id)
+
+
+def get_quick_alarm(alarm_id: str) -> Optional[dict[str, Any]]:
+    with db_conn() as conn:
+        row = conn.execute(
+            """SELECT id, label, kind, due_at, status, experiment_id,
+                      created_at, fired_at, dismissed_at
+               FROM quick_alarms WHERE id = ?""",
+            (alarm_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_quick_alarms(statuses: Optional[list[str]] = None) -> list[dict[str, Any]]:
+    params: list[Any] = []
+    where = ""
+    if statuses:
+        placeholders = ", ".join("?" for _ in statuses)
+        where = f"WHERE q.status IN ({placeholders})"
+        params.extend(statuses)
+    with db_conn() as conn:
+        rows = conn.execute(
+            f"""SELECT q.id, q.label, q.kind, q.due_at, q.status,
+                       q.experiment_id, q.created_at, q.fired_at, q.dismissed_at,
+                       e.name AS experiment_name
+                FROM quick_alarms q
+                LEFT JOIN experiments e ON e.id = q.experiment_id
+                {where}
+                ORDER BY q.due_at, q.created_at""",
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def claim_due_quick_alarms(now: Optional[str] = None) -> list[dict[str, Any]]:
+    """Atomically move due alarms to ringing and return only claimed rows."""
+    fired_at = now or _now()
+    claimed_ids: list[str] = []
+    with db_conn() as conn:
+        rows = conn.execute(
+            """SELECT id FROM quick_alarms
+               WHERE status = 'active' AND due_at <= ?
+               ORDER BY due_at""",
+            (fired_at,),
+        ).fetchall()
+        for row in rows:
+            result = conn.execute(
+                """UPDATE quick_alarms
+                   SET status = 'ringing', fired_at = ?
+                   WHERE id = ? AND status = 'active'""",
+                (fired_at, row["id"]),
+            )
+            if result.rowcount:
+                claimed_ids.append(row["id"])
+    return [
+        alarm
+        for alarm_id in claimed_ids
+        if (alarm := get_quick_alarm(alarm_id)) is not None
+    ]
+
+
+def dismiss_quick_alarm(alarm_id: str) -> Optional[dict[str, Any]]:
+    with db_conn() as conn:
+        conn.execute(
+            """UPDATE quick_alarms
+               SET status = 'dismissed', dismissed_at = ?
+               WHERE id = ? AND status IN ('active', 'ringing')""",
+            (_now(), alarm_id),
+        )
+    return get_quick_alarm(alarm_id)
 
 
 def log_timer_event(
