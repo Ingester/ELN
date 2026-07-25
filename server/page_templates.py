@@ -24,7 +24,7 @@ _CAPTURE_BODY = """
         <input id="capCam" type="file" accept="image/*" capture="environment" multiple onchange="addImages(this)" />
         <input id="capGal" type="file" accept="image/*" multiple onchange="addImages(this)" />
       </div>
-      <label class="orig-toggle small"><input type="checkbox" id="origToggle" /> 上传原图（不压缩；WB／显微等数据图用）</label>
+      <label class="orig-toggle small"><input type="checkbox" id="compressToggle" /> 压缩后上传（省手机流量；默认发原图，WB／显微等数据图别勾）</label>
       <div class="archive-row">
         <button class="green" id="archiveBtn" onclick="archive()">__I_ARCH__ 打包存档</button>
       </div>
@@ -95,7 +95,7 @@ function renderThumbs(){
 async function addImages(input){
   const files = Array.from(input.files);
   input.value = "";
-  const compress = !(document.getElementById("origToggle") && document.getElementById("origToggle").checked);
+  const compress = !!(document.getElementById("compressToggle") && document.getElementById("compressToggle").checked);
   for(const f of files){
     const out = compress ? await compressImage(f) : f;
     addHeldFile(out);
