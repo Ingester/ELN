@@ -461,7 +461,7 @@ async function loadPending(){
         <div class="pt">
           <div class="pending-text" id="pending-text-${it.id}" data-raw="${esc(it.text || "")}" onclick="startPendingEdit(${it.id})" title="点击修改">${body}</div>
           ${fileLinks ? `<div class="pm">${fileLinks}</div>` : ""}
-          <div class="pm">${stamp}${it.hinted_experiment_id?" · 已标实验":""}</div>
+          <div class="pm">#${it.id} · ${stamp}${it.hinted_experiment_id?" · 已标实验":""}</div>
         </div>
       </div>`;
     }).join("");
@@ -755,7 +755,7 @@ function renderEntry(it){
   }
 
   el.innerHTML = `
-    <div class="etime">${stamp} · ${statusBadge(it.status)}${it.hinted_experiment_id?" · 已标实验":""}</div>
+    <div class="etime">#${it.id} · ${stamp} · ${statusBadge(it.status)}${it.hinted_experiment_id?" · 已标实验":""}</div>
     <div class="etext">${bodyText}</div>
     <div class="emedia">${media}</div>
     ${files ? `<div class="efiles">${files}</div>` : ""}
